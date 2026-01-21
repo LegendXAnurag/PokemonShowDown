@@ -4,7 +4,7 @@ Training script for Pokemon RL using TorchRL and MAPPO/IPPO algorithms.
 
 import torch
 import numpy as np
-from environment import PokemonBattleEnv
+from pokemon_env import PokemonBattleEnv
 from visualizer import PokemonVisualizer
 import random
 import time

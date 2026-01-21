@@ -2,7 +2,7 @@
 Test script to verify the Pokemon battle environment implementation.
 """
 
-from environment import PokemonBattleEnv
+from pokemon_env import PokemonBattleEnv
 from pokemon import Pokemon
 from pokemon_data import POKEMON_LIST, get_damage_multiplier
 import random

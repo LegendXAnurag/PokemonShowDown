@@ -101,7 +101,7 @@ train_all_levels(num_episodes_per_level=1000)
 ### Single Level Training
 
 ```python
-from environment import PokemonBattleEnv
+from pokemon_env import PokemonBattleEnv
 from trainer import SimplePPOTrainer
 
 # Create environment for level 3
@@ -115,7 +115,7 @@ trainer.train(num_episodes=1000)
 ### Visualization
 
 ```python
-from environment import PokemonBattleEnv
+from pokemon_env import PokemonBattleEnv
 from visualizer import PokemonVisualizer
 
 env = PokemonBattleEnv(level=1)
@@ -140,7 +140,7 @@ visualizer.close()
 ### Core Components
 
 1. **Pokemon Class** (`pokemon.py`): Represents individual Pokemon with attributes and state
-2. **Environment** (`environment.py`): PettingZoo-based parallel environment
+2. **Environment** (`pokemon_env.py`): PettingZoo-based parallel environment
 3. **Visualizer** (`visualizer.py`): Pygame-based rendering system
 4. **Trainer** (`trainer.py`): Training infrastructure using TorchRL
 5. **Pokemon Data** (`pokemon_data.py`): Static data for types and effectiveness
