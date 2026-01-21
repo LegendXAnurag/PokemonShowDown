@@ -75,7 +75,7 @@ class PokemonVisualizer:
                 sprite = pygame.transform.scale(sprite, (self.cell_size - 10, self.cell_size - 10))
                 self.sprite_cache[sprite_path] = sprite
                 return sprite
-            except:
+            except (pygame.error, OSError):
                 pass
                 
         # Fallback: create colored circle

@@ -171,6 +171,10 @@ class PokemonBattleEnv(ParallelEnv):
             
     def _initialize_pokemon(self):
         """Initialize Pokemon for the battle."""
+        # Validate num_pokemon doesn't exceed available Pokemon
+        if self.num_pokemon > len(POKEMON_LIST):
+            raise ValueError(f"Cannot select {self.num_pokemon} Pokemon when only {len(POKEMON_LIST)} are available")
+        
         # Select random Pokemon
         selected_pokemon = random.sample(POKEMON_LIST, self.num_pokemon)
         

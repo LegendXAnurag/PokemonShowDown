@@ -102,13 +102,13 @@ train_all_levels(num_episodes_per_level=1000)
 
 ```python
 from pokemon_env import PokemonBattleEnv
-from trainer import SimplePPOTrainer
+from trainer import RandomPolicyTrainer
 
 # Create environment for level 3
 env = PokemonBattleEnv(level=3)
 
 # Create and train
-trainer = SimplePPOTrainer(env, level=3, entropy_coef=0.05)
+trainer = RandomPolicyTrainer(env, level=3, entropy_coef=0.05)
 trainer.train(num_episodes=1000)
 ```
 

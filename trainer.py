@@ -10,10 +10,10 @@ import random
 import time
 
 
-class SimplePPOTrainer:
+class RandomPolicyTrainer:
     """
-    Simplified PPO trainer for Pokemon battle environment.
-    This is a placeholder for the full TorchRL implementation.
+    Random policy trainer for Pokemon battle environment.
+    This serves as a baseline and placeholder for full PPO/MAPPO/IPPO implementation with TorchRL.
     """
     
     def __init__(self, env, level=1, entropy_coef=0.01):
@@ -137,8 +137,9 @@ def train_all_levels(num_episodes_per_level=1000):
         
         # Create trainer with appropriate entropy coefficient
         # Higher entropy for exploration of action space
+        # Note: Currently using random policy baseline
         entropy_coef = 0.05 if level <= 3 else 0.03
-        trainer = SimplePPOTrainer(env, level=level, entropy_coef=entropy_coef)
+        trainer = RandomPolicyTrainer(env, level=level, entropy_coef=entropy_coef)
         
         # Train
         trainer.train(num_episodes=num_episodes_per_level, 
