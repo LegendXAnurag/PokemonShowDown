@@ -1,7 +1,7 @@
 import functools
 import math
 import numpy as np
-import random  # <--- Added import
+import random
 from gymnasium import spaces
 from pettingzoo import ParallelEnv
 import pygame
@@ -15,21 +15,19 @@ from ground import draw_ground, draw_walls
 
 class PokemonBattleEnv(ParallelEnv):
     metadata = {
-        "name": "pokemon_battle_lidar_v0",
+        "name": "pokemon_battle_lidar_n_v0",
         "render_modes": ["human", "rgb_array"],
     }
 
     def __init__(self, render_mode=None):
         self.render_mode = render_mode
-        self.possible_agents = ["pikachu", "charmander"]
+        # [CHANGE] Dynamic Agent Names
+        self.possible_agents = [f"agent_{i}" for i in range(config.NUM_AGENTS)]
         self.agents = self.possible_agents[:]
         
         self.action_spaces = {agent: spaces.Discrete(6) for agent in self.possible_agents}
 
-        # [CHANGE] Calculate Observation Size
-        # Self Features: HP (1) + AttackTimer (1) = 2
-        # Lidar Features: Rays (16) * Features (3: Dist, IsWall, IsEnemy) = 48
-        # Total = 50
+        # Obs: Self(2) + Lidar(Num_Rays * 3)
         obs_dim = 2 + (config.NUM_RAYS * 3)
         
         self.observation_spaces = {
@@ -43,108 +41,120 @@ class PokemonBattleEnv(ParallelEnv):
         self.pokemon_instances = {}
         self.window = None
         self.clock = None
-        self.steps_count = 0 # [CHANGE] Track episode steps
+        self.steps_count = 0 
 
     def reset(self, seed=None, options=None):
         self.agents = self.possible_agents[:]
-        self.steps_count = 0 # [CHANGE] Reset timeout counter
+        self.steps_count = 0
         
-        # Set seed for reproducibility if provided
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)
 
-        # --- RANDOMIZED SPAWN LOGIC ---
+        # [CHANGE] N-Agent Spawn Logic
         limit = config.BOUNDARY - config.SPAWN_MARGIN
+        positions = []
         
-        # 1. Generate Position for Agent 1 (Pikachu)
-        x1 = random.uniform(-limit, limit)
-        z1 = random.uniform(-limit, limit)
-        rot1 = random.uniform(0, 360)
+        for _ in range(config.NUM_AGENTS):
+            attempts = 0
+            while attempts < 100:
+                x = random.uniform(-limit, limit)
+                z = random.uniform(-limit, limit)
+                valid = True
+                for (ex, ez) in positions:
+                    dist = math.sqrt((x - ex)**2 + (z - ez)**2)
+                    if dist < config.MIN_SPAWN_DIST:
+                        valid = False
+                        break
+                if valid:
+                    positions.append((x, z))
+                    break
+                attempts += 1
+            if len(positions) < (_ + 1):
+                # Fallback if too crowded: just spawn somewhere random
+                positions.append((random.uniform(-limit, limit), random.uniform(-limit, limit)))
+
+        # Create Instances (Randomly assign species)
+        species_list = list(pokemon_data.POKEMON_DB.keys())
+        self.pokemon_instances = {}
         
-        # 2. Generate Position for Agent 2 (Charmander) with Minimum Distance Check
-        while True:
-            x2 = random.uniform(-limit, limit)
-            z2 = random.uniform(-limit, limit)
-            dist = math.sqrt((x1 - x2)**2 + (z1 - z2)**2)
-            if dist >= config.MIN_SPAWN_DIST:
-                break
-        rot2 = random.uniform(0, 360)
-        
-        # 3. Create Instances
-        self.pokemon_instances = {
-            "pikachu": Pokemon('pikachu', pokemon_data.POKEMON_DB['pikachu'], (x1, 0, z1)),
-            "charmander": Pokemon('charmander', pokemon_data.POKEMON_DB['charmander'], (x2, 0, z2))
-        }
-        self.pokemon_instances["pikachu"].angle = rot1
-        self.pokemon_instances["charmander"].angle = rot2
+        for i, agent_id in enumerate(self.agents):
+            species = random.choice(species_list)
+            pos = (positions[i][0], 0, positions[i][1])
+            p = Pokemon(species, pokemon_data.POKEMON_DB[species], pos)
+            p.angle = random.uniform(0, 360)
+            self.pokemon_instances[agent_id] = p
 
         observations = {agent: self._get_obs(agent) for agent in self.agents}
         infos = {agent: {} for agent in self.agents}
         return observations, infos
 
     def step(self, actions):
-        # [CHANGE] 1. Update Global Timers and Step Count
         self.steps_count += 1
+        
+        # 1. Update Timers (Resets damage dealt counters)
         for p in self.pokemon_instances.values():
             p.update_timers(config.DT)
 
-        all_mons = list(self.pokemon_instances.values())
         prev_hp = {name: p.hp for name, p in self.pokemon_instances.items()}
+        all_mons = list(self.pokemon_instances.values())
 
+        # 2. Execute Actions
         for agent in self.agents:
             if agent not in actions: continue
             
-            action = actions[agent]
             pokemon = self.pokemon_instances[agent]
+            action = actions[agent]
             
+            # Dead agents do nothing
             if pokemon.hp <= 0: continue
 
-            # [CHANGE] Action Locking Logic
-            # If attacking, force No-Op (Action 0).
-            # The Action Mask should have prevented this, but we enforce it here too.
             if pokemon.is_attacking:
-                pass # Locked
+                pass 
             else:
                 if action == 1: pokemon.move_forward()
                 elif action == 2: pokemon.move_forward(speed=-config.MOVE_SPEED/2)
                 elif action == 3: pokemon.rotate(-1)
                 elif action == 4: pokemon.rotate(1)
-                elif action == 5: pokemon.attack(all_mons)
-                # Action 0 is No-Op
+                elif action == 5: pokemon.attack(all_mons) # Uses new simplified attack logic
 
-        # 2. Rewards & Termination
+        # 3. Rewards & Termination
         rewards = {}
         terminations = {}
-        truncations = {} # [CHANGE] For Timeouts
+        truncations = {}
         infos = {}
         observations = {}
         
-        game_over = False
+        alive_count = sum(1 for p in self.pokemon_instances.values() if p.hp > 0)
         
-        # [CHANGE] Check Timeout
+        # [CHANGE] Termination: End if 0 or 1 survivor remains
+        game_over = (alive_count <= 1)
         is_timeout = self.steps_count >= config.MAX_STEPS_PER_EPISODE
 
         for agent in self.agents:
             pokemon = self.pokemon_instances[agent]
-            opponent_name = [a for a in self.agents if a != agent][0]
-            opponent = self.pokemon_instances[opponent_name]
-
-            damage_dealt = prev_hp[opponent_name] - opponent.hp
+            
             damage_taken = prev_hp[agent] - pokemon.hp
             
+            # [CHANGE] Reward calculation based on self.damage_dealt_this_step
             reward = config.REWARD_STEP_PENALTY
-            reward += (damage_dealt * config.REWARD_DMG_DEALT_SCALE)
+            reward += (pokemon.damage_dealt_this_step * config.REWARD_DMG_DEALT_SCALE)
             reward -= (damage_taken * config.REWARD_DMG_TAKEN_SCALE)
             
-            # Win/Loss Condition
-            if opponent.hp <= 0 and pokemon.hp > 0:
-                reward += config.REWARD_WIN
-                game_over = True
-            elif pokemon.hp <= 0:
-                reward += config.REWARD_LOSS
-                game_over = True
+            # Win/Loss
+            if game_over:
+                if pokemon.hp > 0:
+                    reward += config.REWARD_WIN
+                else:
+                    # Only apply loss penalty if they died THIS step or were already dead
+                    # (Usually better to apply large penalty at moment of death)
+                    if prev_hp[agent] > 0 and pokemon.hp <= 0:
+                         reward += config.REWARD_LOSS
             
+            # Death penalty moment
+            if prev_hp[agent] > 0 and pokemon.hp <= 0 and not game_over:
+                 reward += config.REWARD_LOSS
+
             rewards[agent] = reward
             terminations[agent] = game_over
             truncations[agent] = is_timeout
@@ -157,113 +167,80 @@ class PokemonBattleEnv(ParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def _get_obs(self, agent):
-        """
-        [CHANGE] Generates Self State + 16-Ray Lidar Observation.
-        """
         me = self.pokemon_instances[agent]
         all_mons = list(self.pokemon_instances.values())
         
-        # --- Part 1: Self State (2 values) ---
-        # Normalize HP and Cooldown
+        # Self State
         hp_norm = me.hp / me.max_hp
         cd_norm = me.attack_timer / config.ATTACK_DURATION if me.attack_timer > 0 else 0.0
         self_state = [hp_norm, cd_norm]
 
-        # --- Part 2: Lidar Rays (48 values) ---
+        # Lidar
         lidar_data = []
         angle_step = 360.0 / config.NUM_RAYS
         max_dist = config.VISION_RANGE
         boundary = config.BOUNDARY
 
         for i in range(config.NUM_RAYS):
-            # Calculate ray angle (Egocentric: relative to agent's facing)
-            # 0 deg = Front, 90 deg = Right
             ray_angle = (me.angle + (i * angle_step)) % 360
             rad = math.radians(ray_angle)
             dir_x = math.sin(rad)
             dir_z = math.cos(rad)
 
-            # A. Wall Check
+            # A. Wall
             dist_wall = max_dist
-            
-            # Intersection with X boundaries
             if abs(dir_x) > 1e-6:
-                t1 = (boundary - me.x) / dir_x
-                t2 = (-boundary - me.x) / dir_x
-                # We only care about forward direction (t > 0)
+                t1 = (boundary - me.x) / dir_x; t2 = (-boundary - me.x) / dir_x
                 if t1 > 0: dist_wall = min(dist_wall, t1)
                 if t2 > 0: dist_wall = min(dist_wall, t2)
-            
-            # Intersection with Z boundaries
             if abs(dir_z) > 1e-6:
-                t1 = (boundary - me.z) / dir_z
-                t2 = (-boundary - me.z) / dir_z
+                t1 = (boundary - me.z) / dir_z; t2 = (-boundary - me.z) / dir_z
                 if t1 > 0: dist_wall = min(dist_wall, t1)
                 if t2 > 0: dist_wall = min(dist_wall, t2)
 
-            # B. Enemy/Obstacle Check
+            # B. Enemies
             dist_enemy = max_dist
             hit_enemy = False
             
             for target in all_mons:
                 if target == me or target.hp <= 0: continue
                 
-                # Simple Ray-Circle intersection
-                # Vector to circle center
                 fc_x = target.x - me.x
                 fc_z = target.z - me.z
-                
-                # Project vector onto ray direction
                 t_proj = fc_x * dir_x + fc_z * dir_z
-                
-                # Closest point on ray to center
                 closest_x = me.x + dir_x * t_proj
                 closest_z = me.z + dir_z * t_proj
-                
-                # Distance from closest point to center
                 dist_sq = (closest_x - target.x)**2 + (closest_z - target.z)**2
                 radius_sq = config.HITBOX_RADIUS**2
                 
                 if dist_sq < radius_sq and t_proj > 0:
-                    # Intersection exists. Calculate precise distance.
-                    # Offset from closest point back to rim of circle
                     offset = math.sqrt(radius_sq - dist_sq)
                     t_hit = t_proj - offset
                     if t_hit < dist_enemy:
                         dist_enemy = t_hit
                         hit_enemy = True
 
-            # C. Resolve Ray
             final_dist = min(dist_wall, dist_enemy)
-            final_dist = min(final_dist, max_dist) # Clamp
+            final_dist = min(final_dist, max_dist)
             
-            # Features: [Normalized Dist, IsWall, IsEnemy]
             norm_dist = final_dist / max_dist
             is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
             is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
             
             lidar_data.extend([norm_dist, is_wall, is_enemy])
 
-        # Combine
         full_obs = np.array(self_state + lidar_data, dtype=np.float32)
 
-        # --- Part 3: Action Masking ---
+        # Masking
         mask = np.zeros(6, dtype=np.int8)
         
-        if me.is_attacking:
-            # LOCKED: Only No-Op allowed
+        # Dead agents can only No-Op
+        if me.hp <= 0:
+            mask[0] = 1
+        elif me.is_attacking:
             mask[0] = 1
         else:
-            # UNLOCKED
-            mask[0] = 1 # NoOp
-            mask[1] = 1 # Fwd
-            mask[2] = 1 # Bwd
-            mask[3] = 1 # Left
-            mask[4] = 1 # Right
-            
-            # Attack logic:
-            # Must not be on cooldown (covered by is_attacking check usually, but double check)
-            # Must have valid target in sights
+            mask[0] = 1; mask[1] = 1; mask[2] = 1; mask[3] = 1; mask[4] = 1
             if me.check_hit(all_mons):
                 mask[5] = 1
             else:
@@ -285,7 +262,7 @@ class PokemonBattleEnv(ParallelEnv):
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
-        gluLookAt(0, 20, 15, 0, 0, 0, 0, 1, 0)
+        gluLookAt(0, 25, 20, 0, 0, 0, 0, 1, 0)
         
         draw_ground()
         draw_walls()
@@ -300,7 +277,7 @@ class PokemonBattleEnv(ParallelEnv):
         if self.window is not None: return
         pygame.init()
         self.window = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
-        pygame.display.set_caption("Pokemon RL Environment")
+        pygame.display.set_caption("Pokemon N-Agent Battle")
         self.clock = pygame.time.Clock()
         glClearColor(0.53, 0.81, 0.92, 1.0) 
         glEnable(GL_DEPTH_TEST)

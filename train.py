@@ -30,7 +30,6 @@ def parse_args():
 
 def make_env(render_mode=None):
     env = PokemonBattleEnv(render_mode=render_mode)
-    # Converts to VecEnv where num_envs = num_agents * num_parallel_envs
     env = ss.pettingzoo_env_to_vec_env_v1(env)
     env = ss.concat_vec_envs_v1(env, 1, num_cpus=0, base_class='gymnasium')
     return env
@@ -44,12 +43,11 @@ def main():
     if not os.path.exists(log_dir): os.makedirs(log_dir)
     log_file_path = os.path.join(log_dir, f"{run_name}.csv")
     
-    # [CHANGE] Updated CSV Headers
+    # [CHANGE] Generic CSV Headers
     with open(log_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["update", "global_step", "fps", 
-                         "p1_reward", "p2_reward", 
-                         "p1_val_loss", "p2_val_loss", 
+                         "mean_reward", "val_loss", 
                          "total_loss", "entropy", "lr"])
     
     print(f"Logging to: {log_file_path}")
@@ -62,7 +60,6 @@ def main():
 
     envs = make_env("human" if args.render else None)
 
-    # Dynamic Shape Detection
     obs_shape = envs.observation_space['observation'].shape[0]
     action_shape = envs.action_space.n
     print(f"Observation Shape: {obs_shape} | Action Shape: {action_shape}")
@@ -82,9 +79,8 @@ def main():
         global_step = ckpt['global_step']
         start_update = (global_step // (config.NUM_STEPS * envs.num_envs)) + 1
 
-    num_envs = envs.num_envs # Should be 2 (Pikachu, Charmander)
+    num_envs = envs.num_envs 
     
-    # Storage setup
     obs = torch.zeros((config.NUM_STEPS, num_envs, obs_shape)).to(device)
     masks = torch.zeros((config.NUM_STEPS, num_envs, action_shape)).to(device)
     actions = torch.zeros((config.NUM_STEPS, num_envs) + envs.action_space.shape).to(device)
@@ -98,8 +94,8 @@ def main():
     next_mask = torch.Tensor(next_obs_dict['action_mask']).to(device)
     next_done = torch.zeros(num_envs).to(device)
 
-    # [CHANGE] Match Tracking Variables
-    match_rewards = [0.0, 0.0]  # [P1, P2]
+    # [CHANGE] Aggregate Episode Stats
+    episode_rewards = np.zeros(num_envs)
     match_count = 0
     
     batch_size = int(num_envs * config.NUM_STEPS)
@@ -107,7 +103,6 @@ def main():
 
     for update in range(start_update, num_updates + 1):
         
-        # --- ROLLOUT PHASE ---
         for step in range(config.NUM_STEPS):
             global_step += num_envs
             obs[step] = next_obs
@@ -121,51 +116,46 @@ def main():
             actions[step] = action
             logprobs[step] = logprob
 
-            # Step Environment
             next_obs_dict, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
-            next_done = np.logical_or(terminations, truncations)
+            next_done_np = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             
-            # [CHANGE] Track Match Stats
-            # reward is array [p1_rew, p2_rew]
-            match_rewards[0] += reward[0]
-            match_rewards[1] += reward[1]
-
-            # Check if match ended (both agents usually end together in this setup)
-            if next_done[0]: 
+            # [CHANGE] Track N-Agent Match Stats
+            episode_rewards += reward
+            
+            # Check if match ended (if any agent is done, they are all reset in the env implementation)
+            if next_done_np[0]: 
                 match_count += 1
                 
-                # Retrieve HP from infos (handle VectorEnv wrapping)
-                # If done, info is usually in 'final_info' inside the dict
-                hp1 = 0
-                hp2 = 0
+                # Retrieve HP from infos
+                hps = []
+                for i in range(num_envs):
+                    # Handle VectorEnv wrapping
+                    info = infos[i]
+                    hp = info.get("final_info", info).get("hp", 0)
+                    hps.append(hp)
                 
-                # Helper to extract HP safely
-                def get_hp(info_dict):
-                    if "final_info" in info_dict:
-                        return info_dict["final_info"].get("hp", 0)
-                    return info_dict.get("hp", 0)
+                # Determine Survivors
+                survivors = [i for i, hp in enumerate(hps) if hp > 0]
+                if len(survivors) == 1:
+                    winner_text = f"Agent_{survivors[0]}"
+                elif len(survivors) == 0:
+                    winner_text = "Draw (Everyone Died)"
+                else:
+                    winner_text = "Time Limit (Draw)"
 
-                hp1 = get_hp(infos[0])
-                hp2 = get_hp(infos[1])
+                print(f" >> Match {match_count} Finished | Winner: {winner_text}")
+                print(f"    Avg Ep Reward: {np.mean(episode_rewards):.2f}")
                 
-                # Determine Winner
-                winner = "Draw"
-                if hp1 > 0 and hp2 <= 0: winner = "Pikachu"
-                elif hp2 > 0 and hp1 <= 0: winner = "Charmander"
-                
-                print(f" >> Match {match_count} Finished | Winner: {winner}")
-                print(f"    HP: Pika={hp1:.1f}, Char={hp2:.1f} | Ep Reward: Pika={match_rewards[0]:.1f}, Char={match_rewards[1]:.1f}")
-                
-                match_rewards = [0.0, 0.0]
+                episode_rewards = np.zeros(num_envs)
 
             next_obs = torch.Tensor(next_obs_dict['observation']).to(device)
             next_mask = torch.Tensor(next_obs_dict['action_mask']).to(device)
-            next_done = torch.Tensor(next_done).to(device)
+            next_done = torch.Tensor(next_done_np).to(device)
             
             if args.render: envs.render()
 
-        # --- GAE CALCULATION ---
+        # --- GAE ---
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
@@ -181,7 +171,6 @@ def main():
                 advantages[t] = lastgaelam = delta + config.GAMMA * config.GAE_LAMBDA * nextnonterminal * lastgaelam
             returns = advantages + values
 
-        # --- FLATTEN BATCH ---
         b_obs = obs.reshape((-1, obs_shape))
         b_masks = masks.reshape((-1, action_shape))
         b_logprobs = logprobs.reshape(-1)
@@ -192,26 +181,13 @@ def main():
 
         b_inds = np.arange(batch_size)
         
-        # [CHANGE] Pre-calculate specific losses for logging (No Grad)
+        # [CHANGE] Simplified logging logic (Mean across batch)
         with torch.no_grad():
-            # Indices: Evens = P1 (Env 0), Odds = P2 (Env 1)
-            # This relies on the reshape order (Step, Env) -> (S0E0, S0E1, S1E0, S1E1...)
-            p1_idxs = b_inds[b_inds % 2 == 0]
-            p2_idxs = b_inds[b_inds % 2 == 1]
-            
-            # Value Loss P1
-            _, _, _, v_p1 = agent.get_action_and_value(b_obs[p1_idxs], b_actions.long()[p1_idxs], action_mask=b_masks[p1_idxs])
-            val_loss_p1 = 0.5 * ((v_p1.view(-1) - b_returns[p1_idxs]) ** 2).mean().item()
-            
-            # Value Loss P2
-            _, _, _, v_p2 = agent.get_action_and_value(b_obs[p2_idxs], b_actions.long()[p2_idxs], action_mask=b_masks[p2_idxs])
-            val_loss_p2 = 0.5 * ((v_p2.view(-1) - b_returns[p2_idxs]) ** 2).mean().item()
-            
-            # Mean Rewards
-            mean_rew_p1 = rewards[:, 0].mean().item()
-            mean_rew_p2 = rewards[:, 1].mean().item()
+            _, _, _, v_pred = agent.get_action_and_value(b_obs, b_actions.long(), action_mask=b_masks)
+            val_loss_batch = 0.5 * ((v_pred.view(-1) - b_returns) ** 2).mean().item()
+            mean_rew_batch = rewards.mean().item()
 
-        # --- PPO UPDATE ---
+        # --- UPDATE ---
         for epoch in range(config.UPDATE_EPOCHS):
             np.random.shuffle(b_inds)
             for start in range(0, batch_size, config.MINIBATCH_SIZE):
@@ -248,13 +224,12 @@ def main():
         # --- LOGGING ---
         fps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates} | Step {global_step} | FPS: {fps}")
-        print(f"  > Rewards: P1={mean_rew_p1:.2f}, P2={mean_rew_p2:.2f}")
-        print(f"  > V-Loss:  P1={val_loss_p1:.3f}, P2={val_loss_p2:.3f} | Total Loss={loss.item():.3f}")
+        print(f"  > Mean Reward: {mean_rew_batch:.2f}")
+        print(f"  > V-Loss: {val_loss_batch:.3f} | Total Loss={loss.item():.3f}")
 
         with open(log_file_path, mode='a', newline='') as f:
             csv.writer(f).writerow([update, global_step, fps, 
-                                    mean_rew_p1, mean_rew_p2, 
-                                    val_loss_p1, val_loss_p2, 
+                                    mean_rew_batch, val_loss_batch, 
                                     loss.item(), entropy_loss.item(), 
                                     optimizer.param_groups[0]["lr"]])
 

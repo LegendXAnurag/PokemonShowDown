@@ -6,8 +6,8 @@ import config
 from utils import ModelLoader
 
 class Pokemon:
-    def __init__(self, key, data, start_pos):
-        self.name = data['name']
+    def __init__(self, name, data, start_pos):
+        self.name = name
         self.hp = data['hp']
         self.max_hp = data['hp']
         self.attack_power = data['attack_power']
@@ -20,15 +20,15 @@ class Pokemon:
         self.z = start_pos[2]
         self.angle = 0.0 
         
-        # [CHANGE] Time-based logic
-        self.attack_timer = 0.0  # Float (seconds)
+        self.attack_timer = 0.0 
         self.is_attacking = False
         self.actual_beam_length = 0.0
+        
+        # [CHANGE] Track damage for rewards
+        self.damage_dealt_this_step = 0.0
 
     def update_timers(self, dt):
-        """
-        [NEW] Updates internal timers based on Delta Time.
-        """
+        self.damage_dealt_this_step = 0.0 # Reset per frame
         if self.attack_timer > 0:
             self.attack_timer -= dt
             self.is_attacking = True
@@ -37,9 +37,7 @@ class Pokemon:
             self.is_attacking = False
 
     def move_forward(self, speed=None):
-        # [CHANGE] Prevent movement if attacking
-        if self.is_attacking:
-            return
+        if self.is_attacking: return
 
         if speed is None: speed = config.MOVE_SPEED
         rad = math.radians(self.angle)
@@ -49,16 +47,12 @@ class Pokemon:
         new_z = self.z + dz
         limit = config.BOUNDARY - (config.POKEMON_SCALE_SIZE / 2.0)
         
-        # Simple boundary check
         if -limit < new_x < limit and -limit < new_z < limit:
             self.x = new_x
             self.z = new_z
 
     def rotate(self, direction):
-        # [CHANGE] Prevent rotation if attacking
-        if self.is_attacking:
-            return
-
+        if self.is_attacking: return
         self.angle -= direction * config.ROTATION_SPEED
         self.angle %= 360
 
@@ -66,16 +60,17 @@ class Pokemon:
         self.hp -= amount
         if self.hp < 0: self.hp = 0
 
-    def check_hit(self, all_pokemons):
+    def get_hit_target(self, all_pokemons):
         """
-        Checks if an attack WOULD hit. Used for Action Masking.
+        [CHANGE] Returns the SINGLE closest target hit by the ray.
+        Fixes the 'Phantom Damage' bug where attacks pierced targets/walls.
         """
         rad = math.radians(self.angle)
         dir_x = math.sin(rad)
         dir_z = math.cos(rad)
         
-        # Wall Distance
-        dist_candidates = [config.ATTACK_RANGE] 
+        # 1. Calculate max beam length based on WALLS only
+        dist_candidates = [config.ATTACK_RANGE]
         limit = config.BOUNDARY
         
         if abs(dir_x) > 1e-6:
@@ -89,61 +84,60 @@ class Pokemon:
             if t1 > 0: dist_candidates.append(t1)
             if t2 > 0: dist_candidates.append(t2)
             
-        beam_length = min(dist_candidates)
-        if beam_length > config.ATTACK_RANGE:
-            beam_length = config.ATTACK_RANGE
-
-        half_width = config.ATTACK_WIDTH / 2.0
+        max_wall_dist = min(dist_candidates)
         
-        for target in all_pokemons:
-            if target == self or target.hp <= 0: 
-                continue 
+        closest_hit_dist = max_wall_dist
+        hit_target = None
+        
+        half_width = config.ATTACK_WIDTH / 2.0
 
+        # 2. Check Intersections with ALL Pokemons
+        candidates = []
+        for target in all_pokemons:
+            if target == self or target.hp <= 0: continue
+            
+            # Vector to target center
             dx = target.x - self.x
             dz = target.z - self.z
             
-            # Local Space
+            # Local Space coordinates (Relative to Attacker's Rotation)
+            # local_z is distance forward, local_x is distance sideways
             local_x = dx * math.cos(rad) - dz * math.sin(rad)
             local_z = dx * math.sin(rad) + dz * math.cos(rad)
             
-            if (0 < local_z < beam_length) and (-half_width < local_x < half_width):
-                return True
+            # Check rough box
+            if 0 < local_z < closest_hit_dist and -half_width < local_x < half_width:
+                 candidates.append((local_z, target))
 
-        return False
+        # 3. Sort by distance to find the blocking agent
+        candidates.sort(key=lambda x: x[0])
+        
+        if candidates:
+            # We hit the closest one
+            closest_hit_dist = candidates[0][0]
+            hit_target = candidates[0][1]
+
+        return hit_target, closest_hit_dist
+
+    def check_hit(self, all_pokemons):
+        """ Used for Action Masking """
+        target, _ = self.get_hit_target(all_pokemons)
+        return target is not None
 
     def attack(self, all_pokemons):
-        """
-        Sets the attack timer and deals damage.
-        """
-        # [CHANGE] Set timer in seconds
         self.attack_timer = config.ATTACK_DURATION
         self.is_attacking = True
         
-        # Recalculate beam for visuals
-        rad = math.radians(self.angle)
-        dir_x = math.sin(rad)
-        dir_z = math.cos(rad)
-        dist_candidates = [config.ATTACK_RANGE]
-        limit = config.BOUNDARY
-        if abs(dir_x) > 1e-6:
-            t1 = (limit - self.x)/dir_x; t2 = (-limit - self.x)/dir_x
-            if t1>0: dist_candidates.append(t1)
-            if t2>0: dist_candidates.append(t2)
-        if abs(dir_z) > 1e-6:
-            t1 = (limit - self.z)/dir_z; t2 = (-limit - self.z)/dir_z
-            if t1>0: dist_candidates.append(t1)
-            if t2>0: dist_candidates.append(t2)
+        # [CHANGE] Use the new occlusion-aware logic
+        target, dist = self.get_hit_target(all_pokemons)
         
-        self.actual_beam_length = min(dist_candidates)
-        if self.actual_beam_length > config.ATTACK_RANGE:
-            self.actual_beam_length = config.ATTACK_RANGE
-
-        hit = self.check_hit(all_pokemons)
-        if hit:
-            for target in all_pokemons:
-                if target != self and target.hp > 0:
-                     target.take_damage(self.attack_power)
-        return hit
+        self.actual_beam_length = dist
+        
+        if target:
+            target.take_damage(self.attack_power)
+            self.damage_dealt_this_step += self.attack_power # Record for reward
+            return True
+        return False
 
     def draw(self):
         glPushMatrix()
@@ -156,7 +150,6 @@ class Pokemon:
         self.model.draw()
         glPopMatrix()
 
-        # [CHANGE] Check float timer
         if self.attack_timer > 0:
             self._draw_beam()
             
