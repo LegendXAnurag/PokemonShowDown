@@ -1,3 +1,4 @@
+# custom_env.py
 import functools
 import math
 import numpy as np
@@ -21,18 +22,17 @@ class PokemonBattleEnv(ParallelEnv):
 
     def __init__(self, render_mode=None):
         self.render_mode = render_mode
-        # [CHANGE] Dynamic Agent Names
         self.possible_agents = [f"agent_{i}" for i in range(config.NUM_AGENTS)]
         self.agents = self.possible_agents[:]
         
         self.action_spaces = {agent: spaces.Discrete(6) for agent in self.possible_agents}
 
-        # Obs: Self(2) + Lidar(Num_Rays * 3)
-        obs_dim = 2 + (config.NUM_RAYS * 3)
+        # Obs: Self(2) + Lidar(Num_Rays * LIDAR_CHANNELS)
+        obs_dim = 2 + (config.NUM_RAYS * config.LIDAR_CHANNELS)
         
         self.observation_spaces = {
             agent: spaces.Dict({
-                "observation": spaces.Box(low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32),
+                "observation": spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32),
                 "action_mask": spaces.Box(low=0, high=1, shape=(6,), dtype=np.int8)
             })
             for agent in self.possible_agents
@@ -51,7 +51,6 @@ class PokemonBattleEnv(ParallelEnv):
             random.seed(seed)
             np.random.seed(seed)
 
-        # [CHANGE] N-Agent Spawn Logic
         limit = config.BOUNDARY - config.SPAWN_MARGIN
         positions = []
         
@@ -71,10 +70,8 @@ class PokemonBattleEnv(ParallelEnv):
                     break
                 attempts += 1
             if len(positions) < (_ + 1):
-                # Fallback if too crowded: just spawn somewhere random
                 positions.append((random.uniform(-limit, limit), random.uniform(-limit, limit)))
 
-        # Create Instances (Randomly assign species)
         species_list = list(pokemon_data.POKEMON_DB.keys())
         self.pokemon_instances = {}
         
@@ -92,21 +89,18 @@ class PokemonBattleEnv(ParallelEnv):
     def step(self, actions):
         self.steps_count += 1
         
-        # 1. Update Timers (Resets damage dealt counters)
         for p in self.pokemon_instances.values():
             p.update_timers(config.DT)
 
         prev_hp = {name: p.hp for name, p in self.pokemon_instances.items()}
         all_mons = list(self.pokemon_instances.values())
 
-        # 2. Execute Actions
         for agent in self.agents:
             if agent not in actions: continue
             
             pokemon = self.pokemon_instances[agent]
             action = actions[agent]
             
-            # Dead agents do nothing
             if pokemon.hp <= 0: continue
 
             if pokemon.is_attacking:
@@ -116,9 +110,8 @@ class PokemonBattleEnv(ParallelEnv):
                 elif action == 2: pokemon.move_forward(speed=-config.MOVE_SPEED/2)
                 elif action == 3: pokemon.rotate(-1)
                 elif action == 4: pokemon.rotate(1)
-                elif action == 5: pokemon.attack(all_mons) # Uses new simplified attack logic
+                elif action == 5: pokemon.attack(all_mons) 
 
-        # 3. Rewards & Termination
         rewards = {}
         terminations = {}
         truncations = {}
@@ -126,8 +119,6 @@ class PokemonBattleEnv(ParallelEnv):
         observations = {}
         
         alive_count = sum(1 for p in self.pokemon_instances.values() if p.hp > 0)
-        
-        # [CHANGE] Termination: End if 0 or 1 survivor remains
         game_over = (alive_count <= 1)
         is_timeout = self.steps_count >= config.MAX_STEPS_PER_EPISODE
 
@@ -136,22 +127,32 @@ class PokemonBattleEnv(ParallelEnv):
             
             damage_taken = prev_hp[agent] - pokemon.hp
             
-            # [CHANGE] Reward calculation based on self.damage_dealt_this_step
+            # --- Reward Shaping ---
             reward = config.REWARD_STEP_PENALTY
-            reward += (pokemon.damage_dealt_this_step * config.REWARD_DMG_DEALT_SCALE)
-            reward -= (damage_taken * config.REWARD_DMG_TAKEN_SCALE)
             
-            # Win/Loss
+            # 1. Damage Dealt (Execute Bonus is already in effective_damage_reward)
+            # [CHANGE] Use effective_damage_reward instead of damage_dealt_this_step
+            dmg_reward = pokemon.effective_damage_reward * config.REWARD_DMG_DEALT_SCALE
+            
+            # Apply Backstab on top
+            if pokemon.was_backstab_this_step:
+                dmg_reward *= config.REWARD_BACKSTAB_BONUS
+            
+            reward += dmg_reward
+            
+            # 2. Damage Taken (Fear Scaling)
+            if damage_taken > 0:
+                hp_ratio = pokemon.hp / pokemon.max_hp
+                fear_multiplier = 1.0 + (1.0 - hp_ratio) * (config.REWARD_CRITICAL_SCALE - 1.0)
+                reward -= (damage_taken * config.REWARD_DMG_TAKEN_SCALE * fear_multiplier)
+            
             if game_over:
                 if pokemon.hp > 0:
                     reward += config.REWARD_WIN
                 else:
-                    # Only apply loss penalty if they died THIS step or were already dead
-                    # (Usually better to apply large penalty at moment of death)
                     if prev_hp[agent] > 0 and pokemon.hp <= 0:
                          reward += config.REWARD_LOSS
             
-            # Death penalty moment
             if prev_hp[agent] > 0 and pokemon.hp <= 0 and not game_over:
                  reward += config.REWARD_LOSS
 
@@ -170,12 +171,10 @@ class PokemonBattleEnv(ParallelEnv):
         me = self.pokemon_instances[agent]
         all_mons = list(self.pokemon_instances.values())
         
-        # Self State
         hp_norm = me.hp / me.max_hp
         cd_norm = me.attack_timer / config.ATTACK_DURATION if me.attack_timer > 0 else 0.0
         self_state = [hp_norm, cd_norm]
 
-        # Lidar
         lidar_data = []
         angle_step = 360.0 / config.NUM_RAYS
         max_dist = config.VISION_RANGE
@@ -201,6 +200,7 @@ class PokemonBattleEnv(ParallelEnv):
             # B. Enemies
             dist_enemy = max_dist
             hit_enemy = False
+            enemy_obj = None
             
             for target in all_mons:
                 if target == me or target.hp <= 0: continue
@@ -219,22 +219,31 @@ class PokemonBattleEnv(ParallelEnv):
                     if t_hit < dist_enemy:
                         dist_enemy = t_hit
                         hit_enemy = True
+                        enemy_obj = target
 
             final_dist = min(dist_wall, dist_enemy)
             final_dist = min(final_dist, max_dist)
-            
             norm_dist = final_dist / max_dist
-            is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
-            is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
             
-            lidar_data.extend([norm_dist, is_wall, is_enemy])
+            ch_dist = norm_dist
+            ch_is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
+            ch_is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
+            ch_enemy_hp = 0.0
+            ch_enemy_face = 0.0
+
+            if hit_enemy and enemy_obj is not None:
+                ch_enemy_hp = enemy_obj.hp / enemy_obj.max_hp
+                ray_dx = dir_x
+                ray_dz = dir_z
+                en_fx, en_fz = enemy_obj.get_forward_vector()
+                dot = (ray_dx * en_fx) + (ray_dz * en_fz)
+                ch_enemy_face = dot 
+            
+            lidar_data.extend([ch_dist, ch_is_wall, ch_is_enemy, ch_enemy_hp, ch_enemy_face])
 
         full_obs = np.array(self_state + lidar_data, dtype=np.float32)
 
-        # Masking
         mask = np.zeros(6, dtype=np.int8)
-        
-        # Dead agents can only No-Op
         if me.hp <= 0:
             mask[0] = 1
         elif me.is_attacking:
@@ -277,7 +286,7 @@ class PokemonBattleEnv(ParallelEnv):
         if self.window is not None: return
         pygame.init()
         self.window = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
-        pygame.display.set_caption("Pokemon N-Agent Battle")
+        pygame.display.set_caption("Pokemon N-Agent Battle (Survival)")
         self.clock = pygame.time.Clock()
         glClearColor(0.53, 0.81, 0.92, 1.0) 
         glEnable(GL_DEPTH_TEST)

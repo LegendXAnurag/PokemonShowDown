@@ -3,6 +3,7 @@ import os
 import math
 import numpy as np
 import torch
+import time
 import pygame
 import random
 from pygame.locals import *
@@ -18,10 +19,11 @@ from model import PokemonAgent
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize Trained Pokemon Agents")
-    parser.add_argument("--model-path", type=str, default=f"{config.CHECKPOINT_DIR}/pokemon_mappo_lidar_n_agents.pt",
+    parser.add_argument("--model-path", type=str, default=f"{config.CHECKPOINT_DIR}/no_bs_no_crit_v2_exec_backstab.pt",
         help="path to the trained model checkpoint")
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     return parser.parse_args()
+
 def get_n_spawns(n):
     """
     Generates N random spawn positions ensuring MIN_SPAWN_DIST.
@@ -47,8 +49,6 @@ def get_n_spawns(n):
         if len(positions) < (_ + 1):
              positions.append((random.uniform(-limit, limit), random.uniform(-limit, limit), 0))
     return positions
-
-
 
 def init_gl():
     glClearColor(0.53, 0.81, 0.92, 1.0) 
@@ -116,6 +116,7 @@ def build_observation(me, all_pokemons):
         dir_x = math.sin(rad)
         dir_z = math.cos(rad)
 
+        # 1. Wall Check
         dist_wall = max_dist
         if abs(dir_x) > 1e-6:
             t1 = (boundary - me.x) / dir_x; t2 = (-boundary - me.x) / dir_x
@@ -126,8 +127,10 @@ def build_observation(me, all_pokemons):
             if t1 > 0: dist_wall = min(dist_wall, t1)
             if t2 > 0: dist_wall = min(dist_wall, t2)
 
+        # 2. Enemy Check
         dist_enemy = max_dist
         hit_enemy = False
+        enemy_obj = None
         
         for target in all_pokemons:
             if target == me or target.hp <= 0: continue
@@ -146,15 +149,36 @@ def build_observation(me, all_pokemons):
                 if t_hit < dist_enemy:
                     dist_enemy = t_hit
                     hit_enemy = True
+                    enemy_obj = target
 
         final_dist = min(dist_wall, dist_enemy)
         final_dist = min(final_dist, max_dist)
-        
         norm_dist = final_dist / max_dist
-        is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
-        is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
-        
-        lidar_data.extend([norm_dist, is_wall, is_enemy])
+
+        # [CHANGE] Construct 5-Channel Data
+        ch_dist = norm_dist
+        ch_is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
+        ch_is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
+        ch_enemy_hp = 0.0
+        ch_enemy_face = 0.0
+
+        if hit_enemy and enemy_obj is not None:
+            ch_enemy_hp = enemy_obj.hp / enemy_obj.max_hp
+            
+            # Calculate Facing Angle (Dot Product)
+            # Ray Vector (Me -> Enemy)
+            ray_dx = dir_x
+            ray_dz = dir_z
+            
+            # Enemy Forward Vector
+            # Note: accessing .angle directly or using helper if available
+            # We implemented get_forward_vector in pokemon.py
+            en_fx, en_fz = enemy_obj.get_forward_vector()
+            
+            dot = (ray_dx * en_fx) + (ray_dz * en_fz)
+            ch_enemy_face = dot
+
+        lidar_data.extend([ch_dist, ch_is_wall, ch_is_enemy, ch_enemy_hp, ch_enemy_face])
 
     return np.array(self_state + lidar_data, dtype=np.float32)
 
@@ -173,14 +197,12 @@ def get_action_mask(pokemon, all_pokemons):
     return mask
 
 def reset_battle():
-    # [CHANGE] Spawn N Agents
     spawns = get_n_spawns(config.NUM_AGENTS)
     pokemons = []
     
     species_list = list(pokemon_data.POKEMON_DB.keys())
     
     for i in range(config.NUM_AGENTS):
-        # Alternate species just for variety
         species = species_list[i % len(species_list)]
         x, z, rot = spawns[i]
         p = Pokemon(species, pokemon_data.POKEMON_DB[species], (x, 0, z))
@@ -197,19 +219,20 @@ def main():
     
     init_gl()
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu" if torch.cuda.is_available() else "cpu")
     print(f"Loading model on {device}...")
     
-    obs_dim = 2 + (config.NUM_RAYS * 3)
+    # [CHANGE] Updated Dimension Calculation
+    obs_dim = 2 + (config.NUM_RAYS * config.LIDAR_CHANNELS)
     action_dim = 6
     agent = PokemonAgent(obs_dim=obs_dim, action_dim=action_dim).to(device)
     
     if os.path.exists(args.model_path):
         checkpoint = torch.load(args.model_path, map_location=device)
         agent.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Model loaded.")
+        print(f"Model loaded from {args.model_path}")
     else:
-        print(f"Model not found at {args.model_path}")
+        print(f"Model not found at {args.model_path}. Using random weights.")
 
     agent.eval() 
     
@@ -220,7 +243,7 @@ def main():
     # Camera settings
     cam_angle = 0
     cam_dist = 15
-    cam_height = 10
+    cam_height = 15
 
     while running:
         for event in pygame.event.get():
@@ -235,7 +258,6 @@ def main():
             p.update_timers(config.DT)
 
         # AI Inference
-        # Only process if at least one person is alive? No, process all so dead ones No-Op
         obs_list = []
         mask_list = []
         
@@ -267,10 +289,8 @@ def main():
 
         # Auto-Reset if 1 or 0 left
         if alive_count <= 1:
+            time.sleep(1)
             pokemons = reset_battle()
-            # Small delay or just reset immediately?
-            # For visualization, let's wait a bit manually, but here we just loop
-            
 
         # Render
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -281,7 +301,7 @@ def main():
         rad = math.radians(cam_angle)
         cx = math.sin(rad) * cam_dist
         cz = math.cos(rad) * cam_dist
-        gluLookAt(cx, cam_height, cz, 0, 0, 0, 0, 1, 0)
+        gluLookAt(0, cam_height, cam_dist, 0, 0, 0, 0, 1, 0)
         
         draw_ground()
         draw_walls()
@@ -289,7 +309,7 @@ def main():
         for p in pokemons:
             if p.hp > 0:
                 p.draw()
-                draw_hp_bar(p, (cx, cam_height, cz))
+                draw_hp_bar(p, (0, cam_height, cam_dist))
 
         pygame.display.flip()
         clock.tick(config.FPS)

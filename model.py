@@ -1,3 +1,4 @@
+# model.py
 import torch
 import torch.nn as nn
 import numpy as np
@@ -11,36 +12,28 @@ class PokemonAgent(nn.Module):
     def __init__(self, obs_dim, action_dim=6):
         super(PokemonAgent, self).__init__()
         
-        # [CHANGE] Deeper and Wider Network
-        # Input size is ~50.
-        # We scale up to 512 to capture the Lidar pattern complexity.
+        # [CHANGE] Network scales with obs_dim
+        # Old obs_dim ~ 50. New obs_dim ~ 2 + (16*5) = 82
         
         self.network = nn.Sequential(
-            # Input -> 512
             layer_init(nn.Linear(obs_dim, 512)),
             nn.LayerNorm(512),
             nn.LeakyReLU(negative_slope=0.01),
             
-            # 512 -> 256
             layer_init(nn.Linear(512, 256)),
             nn.LayerNorm(256),
             nn.LeakyReLU(negative_slope=0.01),
             
-            # 256 -> 256 (Deep processing)
             layer_init(nn.Linear(256, 256)),
             nn.LayerNorm(256),
             nn.LeakyReLU(negative_slope=0.01),
             
-            # 256 -> 128 (Bottleneck)
             layer_init(nn.Linear(256, 128)),
             nn.LayerNorm(128),
             nn.LeakyReLU(negative_slope=0.01),
         )
 
-        # Actor Head
         self.actor = layer_init(nn.Linear(128, action_dim), std=0.01)
-
-        # Critic Head
         self.critic = layer_init(nn.Linear(128, 1), std=1.0)
 
     def get_value(self, x):
@@ -56,7 +49,6 @@ class PokemonAgent(nn.Module):
         hidden = self.network(x)
         logits = self.actor(hidden)
 
-        # Action Masking
         if action_mask is not None:
             if not isinstance(action_mask, torch.Tensor):
                 action_mask = torch.tensor(action_mask, device=x.device)
@@ -72,9 +64,9 @@ class PokemonAgent(nn.Module):
 
 if __name__ == "__main__":
     # Sanity Check for new Lidar size
-    # 2 self features + 16 rays * 3 features = 50
-    model = PokemonAgent(obs_dim=50)
+    # 2 self + 16 rays * 5 channels = 82
+    model = PokemonAgent(obs_dim=82)
     print(model)
-    dummy = torch.randn(1, 50)
+    dummy = torch.randn(1, 82)
     a, lp, e, v = model.get_action_and_value(dummy)
     print(f"Sanity Check: Action {a.item()}, Value {v.item()}")

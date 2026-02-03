@@ -1,3 +1,4 @@
+# train.py
 import argparse
 import os
 import time
@@ -43,7 +44,6 @@ def main():
     if not os.path.exists(log_dir): os.makedirs(log_dir)
     log_file_path = os.path.join(log_dir, f"{run_name}.csv")
     
-    # [CHANGE] Generic CSV Headers
     with open(log_file_path, mode='w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["update", "global_step", "fps", 
@@ -94,7 +94,6 @@ def main():
     next_mask = torch.Tensor(next_obs_dict['action_mask']).to(device)
     next_done = torch.zeros(num_envs).to(device)
 
-    # [CHANGE] Aggregate Episode Stats
     episode_rewards = np.zeros(num_envs)
     match_count = 0
     
@@ -120,22 +119,17 @@ def main():
             next_done_np = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             
-            # [CHANGE] Track N-Agent Match Stats
             episode_rewards += reward
             
-            # Check if match ended (if any agent is done, they are all reset in the env implementation)
             if next_done_np[0]: 
                 match_count += 1
                 
-                # Retrieve HP from infos
                 hps = []
                 for i in range(num_envs):
-                    # Handle VectorEnv wrapping
                     info = infos[i]
                     hp = info.get("final_info", info).get("hp", 0)
                     hps.append(hp)
                 
-                # Determine Survivors
                 survivors = [i for i, hp in enumerate(hps) if hp > 0]
                 if len(survivors) == 1:
                     winner_text = f"Agent_{survivors[0]}"
@@ -155,7 +149,6 @@ def main():
             
             if args.render: envs.render()
 
-        # --- GAE ---
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
@@ -181,13 +174,11 @@ def main():
 
         b_inds = np.arange(batch_size)
         
-        # [CHANGE] Simplified logging logic (Mean across batch)
         with torch.no_grad():
             _, _, _, v_pred = agent.get_action_and_value(b_obs, b_actions.long(), action_mask=b_masks)
             val_loss_batch = 0.5 * ((v_pred.view(-1) - b_returns) ** 2).mean().item()
             mean_rew_batch = rewards.mean().item()
 
-        # --- UPDATE ---
         for epoch in range(config.UPDATE_EPOCHS):
             np.random.shuffle(b_inds)
             for start in range(0, batch_size, config.MINIBATCH_SIZE):
@@ -221,7 +212,6 @@ def main():
                 nn.utils.clip_grad_norm_(agent.parameters(), config.MAX_GRAD_NORM)
                 optimizer.step()
 
-        # --- LOGGING ---
         fps = int(global_step / (time.time() - start_time))
         print(f"Update {update}/{num_updates} | Step {global_step} | FPS: {fps}")
         print(f"  > Mean Reward: {mean_rew_batch:.2f}")
@@ -233,7 +223,7 @@ def main():
                                     loss.item(), entropy_loss.item(), 
                                     optimizer.param_groups[0]["lr"]])
 
-        if global_step % config.CHECKPOINT_FREQ == 0:
+        if global_step % config.CHECKPOINT_FREQ == 0 or (global_step >= config.TOTAL_TIMESTEPS):
             if not os.path.exists(config.CHECKPOINT_DIR): os.makedirs(config.CHECKPOINT_DIR)
             path = os.path.join(config.CHECKPOINT_DIR, config.MODEL_NAME)
             torch.save({

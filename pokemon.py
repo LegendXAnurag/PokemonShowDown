@@ -1,3 +1,4 @@
+# pokemon.py
 import math
 import numpy as np
 from OpenGL.GL import *
@@ -24,17 +25,25 @@ class Pokemon:
         self.is_attacking = False
         self.actual_beam_length = 0.0
         
-        # [CHANGE] Track damage for rewards
+        # Reward tracking
         self.damage_dealt_this_step = 0.0
+        self.effective_damage_reward = 0.0 # [CHANGE] Tracks damage weighted by Execute Bonus
+        self.was_backstab_this_step = False 
 
     def update_timers(self, dt):
-        self.damage_dealt_this_step = 0.0 # Reset per frame
+        self.damage_dealt_this_step = 0.0 
+        self.effective_damage_reward = 0.0 # [CHANGE] Reset
+        self.was_backstab_this_step = False
         if self.attack_timer > 0:
             self.attack_timer -= dt
             self.is_attacking = True
         else:
             self.attack_timer = 0
             self.is_attacking = False
+
+    def get_forward_vector(self):
+        rad = math.radians(self.angle)
+        return (math.sin(rad), math.cos(rad))
 
     def move_forward(self, speed=None):
         if self.is_attacking: return
@@ -61,15 +70,11 @@ class Pokemon:
         if self.hp < 0: self.hp = 0
 
     def get_hit_target(self, all_pokemons):
-        """
-        [CHANGE] Returns the SINGLE closest target hit by the ray.
-        Fixes the 'Phantom Damage' bug where attacks pierced targets/walls.
-        """
         rad = math.radians(self.angle)
         dir_x = math.sin(rad)
         dir_z = math.cos(rad)
         
-        # 1. Calculate max beam length based on WALLS only
+        # 1. Wall check
         dist_candidates = [config.ATTACK_RANGE]
         limit = config.BOUNDARY
         
@@ -85,42 +90,31 @@ class Pokemon:
             if t2 > 0: dist_candidates.append(t2)
             
         max_wall_dist = min(dist_candidates)
-        
         closest_hit_dist = max_wall_dist
         hit_target = None
-        
         half_width = config.ATTACK_WIDTH / 2.0
 
-        # 2. Check Intersections with ALL Pokemons
+        # 2. Entity check
         candidates = []
         for target in all_pokemons:
             if target == self or target.hp <= 0: continue
             
-            # Vector to target center
             dx = target.x - self.x
             dz = target.z - self.z
-            
-            # Local Space coordinates (Relative to Attacker's Rotation)
-            # local_z is distance forward, local_x is distance sideways
             local_x = dx * math.cos(rad) - dz * math.sin(rad)
             local_z = dx * math.sin(rad) + dz * math.cos(rad)
             
-            # Check rough box
             if 0 < local_z < closest_hit_dist and -half_width < local_x < half_width:
                  candidates.append((local_z, target))
 
-        # 3. Sort by distance to find the blocking agent
         candidates.sort(key=lambda x: x[0])
-        
         if candidates:
-            # We hit the closest one
             closest_hit_dist = candidates[0][0]
             hit_target = candidates[0][1]
 
         return hit_target, closest_hit_dist
 
     def check_hit(self, all_pokemons):
-        """ Used for Action Masking """
         target, _ = self.get_hit_target(all_pokemons)
         return target is not None
 
@@ -128,14 +122,32 @@ class Pokemon:
         self.attack_timer = config.ATTACK_DURATION
         self.is_attacking = True
         
-        # [CHANGE] Use the new occlusion-aware logic
         target, dist = self.get_hit_target(all_pokemons)
-        
         self.actual_beam_length = dist
         
         if target:
+            # [CHANGE] Execute Bonus Calculation
+            # Calculate ratio BEFORE damage (or current, both work if consistent)
+            hp_ratio = target.hp / target.max_hp
+            
             target.take_damage(self.attack_power)
-            self.damage_dealt_this_step += self.attack_power # Record for reward
+            self.damage_dealt_this_step += self.attack_power 
+            
+            # Formula: 1.0 (at Full HP) -> REWARD_EXECUTE_SCALE (at 0 HP)
+            exec_scale = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
+            self.effective_damage_reward += self.attack_power * exec_scale
+
+            # Backstab Logic
+            dx = target.x - self.x
+            dz = target.z - self.z
+            dist_norm = math.sqrt(dx*dx + dz*dz) + 1e-6
+            v_atk = (dx/dist_norm, dz/dist_norm)
+            t_fx, t_fz = target.get_forward_vector()
+            dot = (v_atk[0] * t_fx) + (v_atk[1] * t_fz)
+            
+            if dot > 0.2: 
+                self.was_backstab_this_step = True
+
             return True
         return False
 
