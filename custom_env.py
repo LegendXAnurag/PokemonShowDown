@@ -16,18 +16,28 @@ from ground import draw_ground, draw_walls
 
 class PokemonBattleEnv(ParallelEnv):
     metadata = {
-        "name": "pokemon_battle_lidar_n_v0",
+        "name": "pokemon_battle_team_v0",
         "render_modes": ["human", "rgb_array"],
     }
 
     def __init__(self, render_mode=None):
         self.render_mode = render_mode
-        self.possible_agents = [f"agent_{i}" for i in range(config.NUM_AGENTS)]
-        self.agents = self.possible_agents[:]
         
+        self.possible_agents = []
+        self.agent_team_map = {}
+        
+        count = 0
+        for team_idx, team_setup in enumerate(config.TEAMS_SETUP):
+            num_members = team_setup["count"]
+            for _ in range(num_members):
+                agent_name = f"agent_{count}"
+                self.possible_agents.append(agent_name)
+                self.agent_team_map[agent_name] = team_idx
+                count += 1
+                
+        self.agents = self.possible_agents[:]
         self.action_spaces = {agent: spaces.Discrete(6) for agent in self.possible_agents}
 
-        # Obs: Self(2) + Lidar(Num_Rays * LIDAR_CHANNELS)
         obs_dim = 2 + (config.NUM_RAYS * config.LIDAR_CHANNELS)
         
         self.observation_spaces = {
@@ -54,7 +64,7 @@ class PokemonBattleEnv(ParallelEnv):
         limit = config.BOUNDARY - config.SPAWN_MARGIN
         positions = []
         
-        for _ in range(config.NUM_AGENTS):
+        for _ in range(len(self.agents)):
             attempts = 0
             while attempts < 100:
                 x = random.uniform(-limit, limit)
@@ -78,7 +88,11 @@ class PokemonBattleEnv(ParallelEnv):
         for i, agent_id in enumerate(self.agents):
             species = random.choice(species_list)
             pos = (positions[i][0], 0, positions[i][1])
-            p = Pokemon(species, pokemon_data.POKEMON_DB[species], pos)
+            
+            team_id = self.agent_team_map[agent_id]
+            team_color = config.TEAMS_SETUP[team_id]["color"]
+            
+            p = Pokemon(species, pokemon_data.POKEMON_DB[species], pos, team_id, team_color)
             p.angle = random.uniform(0, 360)
             self.pokemon_instances[agent_id] = p
 
@@ -118,52 +132,64 @@ class PokemonBattleEnv(ParallelEnv):
         infos = {}
         observations = {}
         
-        alive_count = sum(1 for p in self.pokemon_instances.values() if p.hp > 0)
-        game_over = (alive_count <= 1)
+        alive_teams = set()
+        for agent_id, p in self.pokemon_instances.items():
+            if p.hp > 0:
+                alive_teams.add(self.agent_team_map[agent_id])
+        
+        start_teams = len(config.TEAMS_SETUP)
+        if start_teams > 1:
+            game_over = (len(alive_teams) <= 1)
+        else:
+            game_over = (len(alive_teams) == 0)
+
         is_timeout = self.steps_count >= config.MAX_STEPS_PER_EPISODE
 
         for agent in self.agents:
             pokemon = self.pokemon_instances[agent]
+            team_id = self.agent_team_map[agent]
             
             damage_taken = prev_hp[agent] - pokemon.hp
             
-            # --- Reward Shaping ---
             reward = config.REWARD_STEP_PENALTY
             
-            # 1. Damage Dealt (Execute Bonus is already in effective_damage_reward)
-            # [CHANGE] Use effective_damage_reward instead of damage_dealt_this_step
             dmg_reward = pokemon.effective_damage_reward * config.REWARD_DMG_DEALT_SCALE
-            
-            # Apply Backstab on top
             if pokemon.was_backstab_this_step:
                 dmg_reward *= config.REWARD_BACKSTAB_BONUS
-            
             reward += dmg_reward
             
-            # 2. Damage Taken (Fear Scaling)
+            if pokemon.friendly_fire_damage > 0:
+                reward -= (pokemon.friendly_fire_damage * config.REWARD_FRIENDLY_FIRE_SCALE)
+
+            if (pokemon.hp <= 0 and damage_taken>0):
+                reward -= config.DEATH_PENALTY
+
             if damage_taken > 0:
                 hp_ratio = pokemon.hp / pokemon.max_hp
                 fear_multiplier = 1.0 + (1.0 - hp_ratio) * (config.REWARD_CRITICAL_SCALE - 1.0)
                 reward -= (damage_taken * config.REWARD_DMG_TAKEN_SCALE * fear_multiplier)
             
             if game_over:
-                if pokemon.hp > 0:
+                if team_id in alive_teams:
                     reward += config.REWARD_WIN
+                elif len(alive_teams) > 0:
+                    reward += config.REWARD_LOSS
                 else:
-                    if prev_hp[agent] > 0 and pokemon.hp <= 0:
-                         reward += config.REWARD_LOSS
-            
-            if prev_hp[agent] > 0 and pokemon.hp <= 0 and not game_over:
-                 reward += config.REWARD_LOSS
+                    reward += config.REWARD_LOSS
 
             rewards[agent] = reward
             terminations[agent] = game_over
             truncations[agent] = is_timeout
-            infos[agent] = {"hp": pokemon.hp}
+            infos[agent] = {"hp": pokemon.hp, "team": team_id}
             observations[agent] = self._get_obs(agent)
             
-        if game_over or is_timeout:
+        if is_timeout:
+            for agent in self.agents:
+                rewards[agent]+= config.TIMEOUT_LOSS
+
             self.agents = [] 
+        if game_over or is_timeout:
+            self.agents=[]
 
         return observations, rewards, terminations, truncations, infos
 
@@ -196,11 +222,15 @@ class PokemonBattleEnv(ParallelEnv):
                 t1 = (boundary - me.z) / dir_z; t2 = (-boundary - me.z) / dir_z
                 if t1 > 0: dist_wall = min(dist_wall, t1)
                 if t2 > 0: dist_wall = min(dist_wall, t2)
+            if abs(dir_z) > 1e-6:
+                t1 = (boundary - me.z) / dir_z; t2 = (-boundary - me.z) / dir_z
+                if t1 > 0: dist_wall = min(dist_wall, t1)
+                if t2 > 0: dist_wall = min(dist_wall, t2)
 
-            # B. Enemies
-            dist_enemy = max_dist
-            hit_enemy = False
-            enemy_obj = None
+            # B. Entities
+            dist_entity = max_dist
+            hit_entity = False
+            entity_obj = None
             
             for target in all_mons:
                 if target == me or target.hp <= 0: continue
@@ -216,49 +246,83 @@ class PokemonBattleEnv(ParallelEnv):
                 if dist_sq < radius_sq and t_proj > 0:
                     offset = math.sqrt(radius_sq - dist_sq)
                     t_hit = t_proj - offset
-                    if t_hit < dist_enemy:
-                        dist_enemy = t_hit
-                        hit_enemy = True
-                        enemy_obj = target
+                    if t_hit < dist_entity:
+                        dist_entity = t_hit
+                        hit_entity = True
+                        entity_obj = target
 
-            final_dist = min(dist_wall, dist_enemy)
+            final_dist = min(dist_wall, dist_entity)
             final_dist = min(final_dist, max_dist)
             norm_dist = final_dist / max_dist
             
             ch_dist = norm_dist
             ch_is_wall = 1.0 if (final_dist == dist_wall and final_dist < max_dist) else 0.0
-            ch_is_enemy = 1.0 if (final_dist == dist_enemy and hit_enemy and final_dist < max_dist) else 0.0
-            ch_enemy_hp = 0.0
-            ch_enemy_face = 0.0
-
-            if hit_enemy and enemy_obj is not None:
-                ch_enemy_hp = enemy_obj.hp / enemy_obj.max_hp
-                ray_dx = dir_x
-                ray_dz = dir_z
-                en_fx, en_fz = enemy_obj.get_forward_vector()
-                dot = (ray_dx * en_fx) + (ray_dz * en_fz)
-                ch_enemy_face = dot 
             
-            lidar_data.extend([ch_dist, ch_is_wall, ch_is_enemy, ch_enemy_hp, ch_enemy_face])
+            ch_is_enemy = 0.0
+            ch_is_teammate = 0.0
+            ch_unit_hp = 0.0
+            ch_unit_face = 0.0
+
+            if hit_entity and entity_obj is not None and final_dist < dist_wall:
+                if entity_obj.team_id == me.team_id:
+                    ch_is_teammate = 1.0
+                else:
+                    ch_is_enemy = 1.0
+                
+                ch_unit_hp = entity_obj.hp / entity_obj.max_hp
+                ray_dx = dir_x; ray_dz = dir_z
+                en_fx, en_fz = entity_obj.get_forward_vector()
+                dot = (ray_dx * en_fx) + (ray_dz * en_fz)
+                ch_unit_face = dot 
+            
+            lidar_data.extend([ch_dist, ch_is_wall, ch_is_enemy, ch_is_teammate, ch_unit_hp, ch_unit_face])
 
         full_obs = np.array(self_state + lidar_data, dtype=np.float32)
 
+        # [FIX] Action Masking with Collision Detection
         mask = np.zeros(6, dtype=np.int8)
         if me.hp <= 0:
             mask[0] = 1
         elif me.is_attacking:
             mask[0] = 1
         else:
-            mask[0] = 1; mask[1] = 1; mask[2] = 1; mask[3] = 1; mask[4] = 1
-            if me.check_hit(all_mons):
-                mask[5] = 1
+            mask[0] = 0 # No Op
+            mask[1] = 1 # Forward (Tentative)
+            mask[2] = 1 if config.ALLOW_BACKWARD else 0 # Backward (Tentative)
+            mask[3] = 1 # Rotate L
+            mask[4] = 1 # Rotate R
+            mask[5] = 1 if me.check_hit(all_mons) else 0 # Attack
+
+            # Collision Check for Forward (1)
+            pred_x, pred_z = me.predict_position(1)
+            if self._check_collision(me, pred_x, pred_z, all_mons):
+                mask[1] = 0
+            
+            # Collision Check for Backward (2)
+            if config.ALLOW_BACKWARD:
+                pred_x, pred_z = me.predict_position(-1)
+                if self._check_collision(me, pred_x, pred_z, all_mons):
+                    mask[2] = 0
             else:
-                mask[5] = 0
+                mask[2] = 0
 
         return {
             "observation": full_obs,
             "action_mask": mask
         }
+
+    def _check_collision(self, me, x, z, all_mons):
+        """Returns True if (x,z) collides with any other living pokemon."""
+        # Simple Circle Collision
+        # Collision dist = radius + radius = 0.5 + 0.5 = 1.0
+        min_dist_sq = 1.0**2 
+        
+        for target in all_mons:
+            if target == me or target.hp <= 0: continue
+            dist_sq = (x - target.x)**2 + (z - target.z)**2
+            if dist_sq < min_dist_sq:
+                return True
+        return False
 
     def render(self):
         if self.render_mode != "human": return
@@ -271,6 +335,8 @@ class PokemonBattleEnv(ParallelEnv):
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
+        
+        # [FIX] Original Camera Position
         gluLookAt(0, 25, 20, 0, 0, 0, 0, 1, 0)
         
         draw_ground()
@@ -286,7 +352,7 @@ class PokemonBattleEnv(ParallelEnv):
         if self.window is not None: return
         pygame.init()
         self.window = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
-        pygame.display.set_caption("Pokemon N-Agent Battle (Survival)")
+        pygame.display.set_caption("Pokemon Team Battle")
         self.clock = pygame.time.Clock()
         glClearColor(0.53, 0.81, 0.92, 1.0) 
         glEnable(GL_DEPTH_TEST)

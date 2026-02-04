@@ -2,7 +2,7 @@
 # Window Settings
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 800
-WINDOW_TITLE = "Pokemon 3D Battle Engine"
+WINDOW_TITLE = "Pokemon 3D Team Battle Engine"
 
 # Simulation Settings
 FPS = 60
@@ -12,16 +12,27 @@ TILE_SIZE = 1.0
 BOUNDARY = (GRID_SIZE * TILE_SIZE) / 2.0  # From -5 to 5
 MAX_STEPS_PER_EPISODE = 4000 
 
-# Pokemon Settings
-NUM_AGENTS = 3  
+# --- TEAM SETTINGS ---
+# Define teams: Count of agents per team, and their Color (R, G, B)
+TEAMS_SETUP = [
+    {"count": 2, "color": (0.85, 0.1, 0.1)},  # Team 0: Red
+    {"count": 2, "color": (0.1, 0.1, 0.85)},  # Team 1: Blue
+    # {"count": 1, "color": (0.1, 0.8, 0.1)}, # Team 2: Green (Example of uneven teams)
+]
+
+# Calculate total agents dynamically
+NUM_AGENTS = sum(t["count"] for t in TEAMS_SETUP)
+
 POKEMON_SCALE_SIZE = 1.0 
 HITBOX_RADIUS = 0.5    
+
+ALLOW_BACKWARD=False
 
 # Vision / Lidar Settings
 NUM_RAYS = 16
 VISION_RANGE = 15.0  
-# [CHANGE] Channels: Dist, IsWall, IsEnemy, EnemyHP, EnemyFacing
-LIDAR_CHANNELS = 5   
+# [CHANGE] Channels: Dist, IsWall, IsEnemy, IsTeammate, UnitHP, UnitFacing
+LIDAR_CHANNELS = 6   
 
 # Attack Settings
 ATTACK_RANGE = 2.0     
@@ -33,16 +44,19 @@ MOVE_SPEED = 0.10
 ROTATION_SPEED = 4.0 
 
 # --- RL / REWARD SETTINGS ---
-REWARD_WIN = 100.0
+REWARD_WIN = 200.0
 REWARD_LOSS = -100.0
+DEATH_PENALTY = -50.0
+TIMEOUT_LOSS = -1000.0
 REWARD_DMG_DEALT_SCALE = 2.0   
 REWARD_DMG_TAKEN_SCALE = 1.0   
 REWARD_STEP_PENALTY = +0.03
 
-# [CHANGE] Survival & Tactics Rewards
-REWARD_BACKSTAB_BONUS = 2.0    # Multiplier for damage dealt from behind
-REWARD_CRITICAL_SCALE = 4.0    # How much harder damage hurts when HP is low (1x at Full HP -> 4x at 0 HP)
-REWARD_EXECUTE_SCALE = 2.0   # Greed: Multiplier for damage dealt to LOW HP opponents (Predatory behavior)
+# Survival & Tactics Rewards
+REWARD_BACKSTAB_BONUS = 1.5    
+REWARD_CRITICAL_SCALE = 1.7    
+REWARD_EXECUTE_SCALE = 2.0   
+REWARD_FRIENDLY_FIRE_SCALE = 50.0 # [NEW] Penalty multiplier for hitting teammates
 
 # --- SPAWN SETTINGS ---
 SPAWN_MARGIN = 1.0       
@@ -50,7 +64,7 @@ MIN_SPAWN_DIST = 2.0
 
 # --- TRAINING HYPERPARAMETERS ---
 LEARNING_RATE = 3e-4
-TOTAL_TIMESTEPS = 5000000
+TOTAL_TIMESTEPS = 6000000
 NUM_STEPS = 256           
 BATCH_SIZE = 512          
 MINIBATCH_SIZE = 64
@@ -65,5 +79,4 @@ UPDATE_EPOCHS = 10
 # --- CHECKPOINTING ---
 CHECKPOINT_FREQ = 2500   
 CHECKPOINT_DIR = "checkpoints"
-# MODEL_NAME = "pokemon_mappo_survival_no_backstab.pt"
-MODEL_NAME = "no_bs_no_crit_v2_exec_backstab.pt"
+MODEL_NAME = "pokemon_team_battle_2v2_backstab.pt"

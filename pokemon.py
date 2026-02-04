@@ -7,14 +7,20 @@ import config
 from utils import ModelLoader
 
 class Pokemon:
-    def __init__(self, name, data, start_pos):
+    def __init__(self, name, data, start_pos, team_id, team_color):
         self.name = name
         self.hp = data['hp']
         self.max_hp = data['hp']
         self.attack_power = data['attack_power']
-        self.color = data['color_fallback']
+        
+        # [FIX] Use species color for the model (Original look), store team color for the ring
+        self.species_color = data['color_fallback']
+        self.team_id = team_id
+        self.team_color = team_color
+        
         rot_offset = data.get('rotation_correction', 0)
-        self.model = ModelLoader(data['model_path'], data['color_fallback'], rotation_offset=rot_offset)
+        # Load model with species color, not team color
+        self.model = ModelLoader(data['model_path'], self.species_color, rotation_offset=rot_offset)
         
         self.x = start_pos[0]
         self.y = (config.POKEMON_SCALE_SIZE / 2.0)
@@ -27,12 +33,14 @@ class Pokemon:
         
         # Reward tracking
         self.damage_dealt_this_step = 0.0
-        self.effective_damage_reward = 0.0 # [CHANGE] Tracks damage weighted by Execute Bonus
+        self.effective_damage_reward = 0.0
         self.was_backstab_this_step = False 
+        self.friendly_fire_damage = 0.0
 
     def update_timers(self, dt):
         self.damage_dealt_this_step = 0.0 
-        self.effective_damage_reward = 0.0 # [CHANGE] Reset
+        self.effective_damage_reward = 0.0
+        self.friendly_fire_damage = 0.0
         self.was_backstab_this_step = False
         if self.attack_timer > 0:
             self.attack_timer -= dt
@@ -44,6 +52,17 @@ class Pokemon:
     def get_forward_vector(self):
         rad = math.radians(self.angle)
         return (math.sin(rad), math.cos(rad))
+
+    def predict_position(self, direction=1):
+        """
+        Predicts (x, z) if the agent moves. 
+        direction: 1 for forward, -1 for backward (half speed)
+        """
+        speed = config.MOVE_SPEED if direction == 1 else (config.MOVE_SPEED / 2.0)
+        rad = math.radians(self.angle)
+        dx = math.sin(rad) * speed * (1 if direction == 1 else -1)
+        dz = math.cos(rad) * speed * (1 if direction == 1 else -1)
+        return self.x + dx, self.z + dz
 
     def move_forward(self, speed=None):
         if self.is_attacking: return
@@ -66,7 +85,10 @@ class Pokemon:
         self.angle %= 360
 
     def take_damage(self, amount):
+        initial_hp=self.hp
         self.hp -= amount
+        if self.hp<0 and initial_hp>0:
+            pass
         if self.hp < 0: self.hp = 0
 
     def get_hit_target(self, all_pokemons):
@@ -126,18 +148,19 @@ class Pokemon:
         self.actual_beam_length = dist
         
         if target:
-            # [CHANGE] Execute Bonus Calculation
-            # Calculate ratio BEFORE damage (or current, both work if consistent)
+            if target.team_id == self.team_id:
+                target.take_damage(self.attack_power)
+                self.friendly_fire_damage += self.attack_power
+                return True 
+
             hp_ratio = target.hp / target.max_hp
-            
             target.take_damage(self.attack_power)
             self.damage_dealt_this_step += self.attack_power 
             
-            # Formula: 1.0 (at Full HP) -> REWARD_EXECUTE_SCALE (at 0 HP)
-            exec_scale = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
-            self.effective_damage_reward += self.attack_power * exec_scale
+            # exec_scale = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
+            # self.effective_damage_reward += self.attack_power * exec_scale
+            self.effective_damage_reward = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
 
-            # Backstab Logic
             dx = target.x - self.x
             dz = target.z - self.z
             dist_norm = math.sqrt(dx*dx + dz*dz) + 1e-6
@@ -145,13 +168,16 @@ class Pokemon:
             t_fx, t_fz = target.get_forward_vector()
             dot = (v_atk[0] * t_fx) + (v_atk[1] * t_fz)
             
-            if dot > 0.2: 
+            if dot > -0.01: 
                 self.was_backstab_this_step = True
 
             return True
         return False
 
     def draw(self):
+        # [FIX] Draw Team Indicator Ring on the ground
+        self.draw_team_indicator()
+
         glPushMatrix()
         glTranslatef(self.x, self.y, self.z)
         glRotatef(self.angle, 0, 1, 0)
@@ -159,12 +185,37 @@ class Pokemon:
         glPushMatrix()
         s = self.model.scale_factor
         glScalef(s, s, s)
+        
+        # [FIX] Reset color to white so texture/material colors show correctly
+        glColor3f(1, 1, 1) 
         self.model.draw()
         glPopMatrix()
 
         if self.attack_timer > 0:
             self._draw_beam()
             
+        glPopMatrix()
+
+    def draw_team_indicator(self):
+        """Draws a colored ring below the pokemon to indicate team."""
+        glPushMatrix()
+        glTranslatef(self.x, 0.05, self.z) # Slightly above ground
+        
+        glDisable(GL_LIGHTING)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        r, g, b = self.team_color
+        glColor4f(r, g, b, 0.7) # Slightly transparent
+        
+        quadric = gluNewQuadric()
+        # Inner radius 0.4, Outer radius 0.6
+        gluDisk(quadric, 0.4, 0.7, 20, 1)
+        gluDeleteQuadric(quadric)
+        
+        glDisable(GL_BLEND)
+        glEnable(GL_LIGHTING)
+        
         glPopMatrix()
 
     def _draw_beam(self):
@@ -176,8 +227,8 @@ class Pokemon:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE)
         
-        r, g, b = self.color
-        glColor4f(r, g, b, 0.6)
+        r, g, b = self.species_color
+        glColor4f(r, g, b, 0.4)
 
         quadric = gluNewQuadric()
         gluQuadricNormals(quadric, GLU_SMOOTH)

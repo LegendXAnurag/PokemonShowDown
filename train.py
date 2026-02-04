@@ -9,13 +9,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import supersuit as ss
+from tqdm import tqdm  # [ADDED] Import tqdm
 
 import config
 from custom_env import PokemonBattleEnv
 from model import PokemonAgent
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train Pokemon Agent using MAPPO")
+    parser = argparse.ArgumentParser(description="Train Pokemon Agent using MAPPO (Team Battle)")
     parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__).rstrip(".py"),
         help="the name of this experiment")
     parser.add_argument("--seed", type=int, default=1,
@@ -63,6 +64,7 @@ def main():
     obs_shape = envs.observation_space['observation'].shape[0]
     action_shape = envs.action_space.n
     print(f"Observation Shape: {obs_shape} | Action Shape: {action_shape}")
+    print(f"Total Agents: {config.NUM_AGENTS} | Teams Config: {config.TEAMS_SETUP}")
     
     agent = PokemonAgent(obs_dim=obs_shape, action_dim=action_shape).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=config.LEARNING_RATE, eps=1e-5)
@@ -78,6 +80,7 @@ def main():
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         global_step = ckpt['global_step']
         start_update = (global_step // (config.NUM_STEPS * envs.num_envs)) + 1
+        print("checkpoint loaded succesfully")
 
     num_envs = envs.num_envs 
     
@@ -100,7 +103,8 @@ def main():
     batch_size = int(num_envs * config.NUM_STEPS)
     num_updates = config.TOTAL_TIMESTEPS // batch_size
 
-    for update in range(start_update, num_updates + 1):
+    # [CHANGE] Wrapped the range iterator with tqdm to show progress and ETA
+    for update in tqdm(range(start_update, num_updates + 1), initial=start_update, total=num_updates, unit="upd"):
         
         for step in range(config.NUM_STEPS):
             global_step += num_envs
@@ -121,22 +125,26 @@ def main():
             
             episode_rewards += reward
             
+            # [CHANGE] Updated Match Finish Logic for Teams
             if next_done_np[0]: 
                 match_count += 1
                 
-                hps = []
+                # Analyze results from info
+                alive_teams = set()
                 for i in range(num_envs):
                     info = infos[i]
-                    hp = info.get("final_info", info).get("hp", 0)
-                    hps.append(hp)
+                    final_info = info.get("final_info", info)
+                    hp = final_info.get("hp", 0)
+                    team_id = final_info.get("team", -1)
+                    if hp > 0:
+                        alive_teams.add(team_id)
                 
-                survivors = [i for i, hp in enumerate(hps) if hp > 0]
-                if len(survivors) == 1:
-                    winner_text = f"Agent_{survivors[0]}"
-                elif len(survivors) == 0:
-                    winner_text = "Draw (Everyone Died)"
+                if len(alive_teams) == 1:
+                    winner_text = f"Team {list(alive_teams)[0]}"
+                elif len(alive_teams) == 0:
+                    winner_text = "Draw (All Died)"
                 else:
-                    winner_text = "Time Limit (Draw)"
+                    winner_text = "Draw (Time Limit)"
 
                 print(f" >> Match {match_count} Finished | Winner: {winner_text}")
                 print(f"    Avg Ep Reward: {np.mean(episode_rewards):.2f}")
