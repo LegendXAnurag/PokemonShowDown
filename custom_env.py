@@ -323,6 +323,7 @@ class PokemonBattleEnv(ParallelEnv):
             if dist_sq < min_dist_sq:
                 return True
         return False
+    # In custom_env.py
 
     def render(self):
         if self.render_mode != "human": return
@@ -336,17 +337,50 @@ class PokemonBattleEnv(ParallelEnv):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
         
-        # [FIX] Original Camera Position
         gluLookAt(0, 25, 20, 0, 0, 0, 0, 1, 0)
         
+        # 1. Draw Static Environment (Opaque)
         draw_ground()
         draw_walls()
         
+        # 2. Draw Pokemon Bodies (Opaque)
+        # We draw these first so the Z-buffer is filled with their depth
         for p in self.pokemon_instances.values():
-            if p.hp > 0: p.draw()
+            if p.hp > 0: 
+                p.draw_model() # Changed from p.draw()
+
+        # 3. Draw Attack Beams (Transparent)
+        # We draw these last. Because we disabled DepthMask in draw_beam,
+        # they will visually blend on top of pokemon, but won't delete them.
+        for p in self.pokemon_instances.values():
+            if p.hp > 0:
+                p.draw_beam()
 
         pygame.display.flip()
         if self.clock: self.clock.tick(config.FPS)
+    # def render(self):
+    #     if self.render_mode != "human": return
+    #     if self.window is None: self._init_render()
+
+    #     for event in pygame.event.get():
+    #         if event.type == pygame.QUIT:
+    #             self.close()
+    #             exit()
+
+    #     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    #     glLoadIdentity()
+        
+    #     # [FIX] Original Camera Position
+    #     gluLookAt(0, 25, 20, 0, 0, 0, 0, 1, 0)
+        
+    #     draw_ground()
+    #     draw_walls()
+        
+    #     for p in self.pokemon_instances.values():
+    #         if p.hp > 0: p.draw()
+
+    #     pygame.display.flip()
+    #     if self.clock: self.clock.tick(config.FPS)
 
     def _init_render(self):
         if self.window is not None: return

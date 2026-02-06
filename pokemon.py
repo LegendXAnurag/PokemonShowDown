@@ -168,7 +168,7 @@ class Pokemon:
             t_fx, t_fz = target.get_forward_vector()
             dot = (v_atk[0] * t_fx) + (v_atk[1] * t_fz)
             
-            if dot > -0.01: 
+            if dot > -0.5: 
                 self.was_backstab_this_step = True
 
             return True
@@ -217,7 +217,70 @@ class Pokemon:
         glEnable(GL_LIGHTING)
         
         glPopMatrix()
+    # In pokemon.py
 
+    def draw_model(self):
+        """Draws the opaque parts: Team Ring and Pokemon Body."""
+        # Draw Team Indicator Ring (Opaque/Alpha Test)
+        self.draw_team_indicator()
+
+        glPushMatrix()
+        glTranslatef(self.x, self.y, self.z)
+        glRotatef(self.angle, 0, 1, 0)
+        
+        glPushMatrix()
+        s = self.model.scale_factor
+        glScalef(s, s, s)
+        
+        # Reset color to white so texture/material colors show correctly
+        glColor3f(1, 1, 1) 
+        self.model.draw()
+        glPopMatrix()
+            
+        glPopMatrix()
+
+    def draw_beam(self):
+        """Draws the transparent attack beam."""
+        if self.attack_timer <= 0:
+            return
+
+        glPushMatrix()
+        # Apply the same transformations so the beam starts from the Pokemon
+        glTranslatef(self.x, self.y, self.z)
+        glRotatef(self.angle, 0, 1, 0)
+
+        length = self.actual_beam_length
+        radius = config.ATTACK_WIDTH / 2.0
+        
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT) # Save Depth buffer bit too
+        glDisable(GL_LIGHTING)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        
+        # [FIX] Disable Depth Mask. 
+        # The beam is checked against walls (Depth Test), 
+        # but it won't write to the depth buffer, so it won't hide objects drawn after it.
+        glDepthMask(GL_FALSE) 
+        
+        r, g, b = self.species_color
+        glColor4f(r, g, b, 0.4)
+
+        quadric = gluNewQuadric()
+        gluQuadricNormals(quadric, GLU_SMOOTH)
+        gluCylinder(quadric, radius, radius, length, 16, 1)
+        
+        glPushMatrix()
+        glTranslatef(0, 0, length)
+        gluDisk(quadric, 0, radius, 16, 1)
+        glPopMatrix()
+        
+        gluDisk(quadric, 0, radius, 16, 1)
+
+        gluDeleteQuadric(quadric)
+        
+        # [FIX] Restore attributes (including Depth Mask = True)
+        glPopAttrib() 
+        glPopMatrix()
     def _draw_beam(self):
         length = self.actual_beam_length
         radius = config.ATTACK_WIDTH / 2.0

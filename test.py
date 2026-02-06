@@ -20,7 +20,7 @@ from model import PokemonAgent
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize Trained Pokemon Agents (Team Battle)")
-    parser.add_argument("--model-path", type=str, default=f"{config.CHECKPOINT_DIR}/pokemon_team_battle_2v2_fix.pt",
+    parser.add_argument("--model-path", type=str, default=f"{config.CHECKPOINT_DIR}/pokemon_team_battle_2v2_backstab_feb6.pt",
         help="path to the trained model checkpoint")
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     return parser.parse_args()
