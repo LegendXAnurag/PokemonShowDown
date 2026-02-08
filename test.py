@@ -205,25 +205,76 @@ def get_action_mask(pokemon, all_pokemons):
     return mask
 
 def reset_battle():
-    total_agents = config.NUM_AGENTS
-    spawns = get_n_spawns(total_agents)
     pokemons = []
-    
     species_list = list(pokemon_data.POKEMON_DB.keys())
+    limit = config.BOUNDARY - config.SPAWN_MARGIN
     
-    global_idx = 0
+    # Store positions to check for collisions
+    # Format: (x, z, team_idx)
+    occupied_positions = [] 
+    
+    num_teams = len(config.TEAMS_SETUP)
+
     for team_idx, team_setup in enumerate(config.TEAMS_SETUP):
         count = team_setup["count"]
         color = team_setup["color"]
         
+        # Calculate Team Center
+        radius = (config.BOUNDARY - config.SPAWN_MARGIN) * 0.75 
+        angle = (2 * math.pi / num_teams) * team_idx
+        cx = radius * math.cos(angle)
+        cz = radius * math.sin(angle)
+
         for _ in range(count):
-            if global_idx >= len(spawns): break
             species = random.choice(species_list)
-            x, z, rot = spawns[global_idx]
-            p = Pokemon(species, pokemon_data.POKEMON_DB[species], (x, 0, z), team_idx, color)
-            p.angle = rot
+            
+            # Spawn Logic
+            attempts = 0
+            placed = False
+            final_x, final_z = 0, 0
+            
+            while attempts < 100:
+                # Spawn around team center
+                r = random.uniform(0, config.TEAM_MEMBER_DIST)
+                theta = random.uniform(0, 2*math.pi)
+                x = cx + r * math.cos(theta)
+                z = cz + r * math.sin(theta)
+                
+                # Check bounds
+                if not (-limit <= x <= limit and -limit <= z <= limit):
+                    attempts += 1
+                    continue
+                
+                valid = True
+                for (ex, ez, et) in occupied_positions:
+                    dist = math.sqrt((x - ex)**2 + (z - ez)**2)
+                    
+                    if et == team_idx:
+                        # Teammate check
+                        if dist < config.MIN_TEAMMATE_DIST:
+                            valid = False
+                            break
+                    else:
+                        # Enemy check
+                        if dist < config.MIN_SPAWN_DIST:
+                            valid = False
+                            break
+                
+                if valid:
+                    final_x, final_z = x, z
+                    placed = True
+                    break
+                attempts += 1
+            
+            if not placed:
+                 final_x = random.uniform(-limit, limit)
+                 final_z = random.uniform(-limit, limit)
+
+            occupied_positions.append((final_x, final_z, team_idx))
+            
+            p = Pokemon(species, pokemon_data.POKEMON_DB[species], (final_x, 0, final_z), team_idx, color)
+            p.angle = random.uniform(0, 360)
             pokemons.append(p)
-            global_idx += 1
         
     return pokemons
 

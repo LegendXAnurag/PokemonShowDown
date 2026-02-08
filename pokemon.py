@@ -1,4 +1,3 @@
-# pokemon.py
 import math
 import numpy as np
 from OpenGL.GL import *
@@ -13,13 +12,15 @@ class Pokemon:
         self.max_hp = data['hp']
         self.attack_power = data['attack_power']
         
-        # [FIX] Use species color for the model (Original look), store team color for the ring
+        # Use species color for the model, store team color for the ring
         self.species_color = data['color_fallback']
         self.team_id = team_id
         self.team_color = team_color
         
+        # This flag is set in test_human.py for the player
+        self.is_human = False 
+        
         rot_offset = data.get('rotation_correction', 0)
-        # Load model with species color, not team color
         self.model = ModelLoader(data['model_path'], self.species_color, rotation_offset=rot_offset)
         
         self.x = start_pos[0]
@@ -42,6 +43,7 @@ class Pokemon:
         self.effective_damage_reward = 0.0
         self.friendly_fire_damage = 0.0
         self.was_backstab_this_step = False
+        
         if self.attack_timer > 0:
             self.attack_timer -= dt
             self.is_attacking = True
@@ -54,10 +56,6 @@ class Pokemon:
         return (math.sin(rad), math.cos(rad))
 
     def predict_position(self, direction=1):
-        """
-        Predicts (x, z) if the agent moves. 
-        direction: 1 for forward, -1 for backward (half speed)
-        """
         speed = config.MOVE_SPEED if direction == 1 else (config.MOVE_SPEED / 2.0)
         rad = math.radians(self.angle)
         dx = math.sin(rad) * speed * (1 if direction == 1 else -1)
@@ -66,7 +64,6 @@ class Pokemon:
 
     def move_forward(self, speed=None):
         if self.is_attacking: return
-
         if speed is None: speed = config.MOVE_SPEED
         rad = math.radians(self.angle)
         dx = math.sin(rad) * speed
@@ -85,18 +82,19 @@ class Pokemon:
         self.angle %= 360
 
     def take_damage(self, amount):
-        initial_hp=self.hp
         self.hp -= amount
-        if self.hp<0 and initial_hp>0:
-            pass
         if self.hp < 0: self.hp = 0
 
     def get_hit_target(self, all_pokemons):
+        """
+        Detects the first target hit by the beam.
+        Uses Circle-to-Rectangle intersection for wider hitboxes.
+        """
         rad = math.radians(self.angle)
         dir_x = math.sin(rad)
         dir_z = math.cos(rad)
         
-        # 1. Wall check
+        # 1. Wall check (Max beam length)
         dist_candidates = [config.ATTACK_RANGE]
         limit = config.BOUNDARY
         
@@ -111,28 +109,41 @@ class Pokemon:
             if t1 > 0: dist_candidates.append(t1)
             if t2 > 0: dist_candidates.append(t2)
             
-        max_wall_dist = min(dist_candidates)
-        closest_hit_dist = max_wall_dist
+        max_beam_dist = min(dist_candidates)
+        closest_hit_dist = max_beam_dist
         hit_target = None
-        half_width = config.ATTACK_WIDTH / 2.0
 
-        # 2. Entity check
+        # 2. Entity check (Circle-to-Rectangle)
+        # Half width of the beam + radius of the target pokemon
+        effective_half_width = (config.ATTACK_WIDTH / 2.0) + config.HITBOX_RADIUS
+        
         candidates = []
         for target in all_pokemons:
             if target == self or target.hp <= 0: continue
             
             dx = target.x - self.x
             dz = target.z - self.z
-            local_x = dx * math.cos(rad) - dz * math.sin(rad)
-            local_z = dx * math.sin(rad) + dz * math.cos(rad)
             
-            if 0 < local_z < closest_hit_dist and -half_width < local_x < half_width:
-                 candidates.append((local_z, target))
+            # Project target into local space of the beam
+            # local_z: distance forward from attacker
+            # local_x: lateral distance from the beam center line
+            local_z = dx * math.sin(rad) + dz * math.cos(rad)
+            local_x = dx * math.cos(rad) - dz * math.sin(rad)
+            
+            # Check if target center is within the 'extended' beam rectangle
+            # We allow local_z up to max_beam_dist + target_radius for partial hits
+            if 0 < local_z < (max_beam_dist + config.HITBOX_RADIUS):
+                if abs(local_x) < effective_half_width:
+                    # Record valid hit
+                    dist_to_hit = max(0, local_z) 
+                    candidates.append((dist_to_hit, target))
 
         candidates.sort(key=lambda x: x[0])
         if candidates:
-            closest_hit_dist = candidates[0][0]
-            hit_target = candidates[0][1]
+            # Re-verify that the hit is within actual beam length or wall
+            if candidates[0][0] < closest_hit_dist:
+                closest_hit_dist = candidates[0][0]
+                hit_target = candidates[0][1]
 
         return hit_target, closest_hit_dist
 
@@ -141,7 +152,9 @@ class Pokemon:
         return target is not None
 
     def attack(self, all_pokemons):
-        self.attack_timer = config.ATTACK_DURATION
+        # [FIX] Human player has 0.05s duration, AI uses config.ATTACK_DURATION
+        duration = config.HUMAN_ATTACK_DURATION if self.is_human else config.ATTACK_DURATION
+        self.attack_timer = duration
         self.is_attacking = True
         
         target, dist = self.get_hit_target(all_pokemons)
@@ -157,8 +170,6 @@ class Pokemon:
             target.take_damage(self.attack_power)
             self.damage_dealt_this_step += self.attack_power 
             
-            # exec_scale = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
-            # self.effective_damage_reward += self.attack_power * exec_scale
             self.effective_damage_reward = 1.0 + (1.0 - hp_ratio) * (config.REWARD_EXECUTE_SCALE - 1.0)
 
             dx = target.x - self.x
@@ -175,7 +186,7 @@ class Pokemon:
         return False
 
     def draw(self):
-        # [FIX] Draw Team Indicator Ring on the ground
+        """Draws the indicator ring and the model."""
         self.draw_team_indicator()
 
         glPushMatrix()
@@ -185,8 +196,6 @@ class Pokemon:
         glPushMatrix()
         s = self.model.scale_factor
         glScalef(s, s, s)
-        
-        # [FIX] Reset color to white so texture/material colors show correctly
         glColor3f(1, 1, 1) 
         self.model.draw()
         glPopMatrix()
@@ -197,90 +206,20 @@ class Pokemon:
         glPopMatrix()
 
     def draw_team_indicator(self):
-        """Draws a colored ring below the pokemon to indicate team."""
         glPushMatrix()
-        glTranslatef(self.x, 0.05, self.z) # Slightly above ground
-        
+        glTranslatef(self.x, 0.05, self.z) 
         glDisable(GL_LIGHTING)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        
         r, g, b = self.team_color
-        glColor4f(r, g, b, 0.7) # Slightly transparent
-        
+        glColor4f(r, g, b, 0.7)
         quadric = gluNewQuadric()
-        # Inner radius 0.4, Outer radius 0.6
         gluDisk(quadric, 0.4, 0.7, 20, 1)
         gluDeleteQuadric(quadric)
-        
         glDisable(GL_BLEND)
         glEnable(GL_LIGHTING)
-        
-        glPopMatrix()
-    # In pokemon.py
-
-    def draw_model(self):
-        """Draws the opaque parts: Team Ring and Pokemon Body."""
-        # Draw Team Indicator Ring (Opaque/Alpha Test)
-        self.draw_team_indicator()
-
-        glPushMatrix()
-        glTranslatef(self.x, self.y, self.z)
-        glRotatef(self.angle, 0, 1, 0)
-        
-        glPushMatrix()
-        s = self.model.scale_factor
-        glScalef(s, s, s)
-        
-        # Reset color to white so texture/material colors show correctly
-        glColor3f(1, 1, 1) 
-        self.model.draw()
-        glPopMatrix()
-            
         glPopMatrix()
 
-    def draw_beam(self):
-        """Draws the transparent attack beam."""
-        if self.attack_timer <= 0:
-            return
-
-        glPushMatrix()
-        # Apply the same transformations so the beam starts from the Pokemon
-        glTranslatef(self.x, self.y, self.z)
-        glRotatef(self.angle, 0, 1, 0)
-
-        length = self.actual_beam_length
-        radius = config.ATTACK_WIDTH / 2.0
-        
-        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT) # Save Depth buffer bit too
-        glDisable(GL_LIGHTING)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-        
-        # [FIX] Disable Depth Mask. 
-        # The beam is checked against walls (Depth Test), 
-        # but it won't write to the depth buffer, so it won't hide objects drawn after it.
-        glDepthMask(GL_FALSE) 
-        
-        r, g, b = self.species_color
-        glColor4f(r, g, b, 0.4)
-
-        quadric = gluNewQuadric()
-        gluQuadricNormals(quadric, GLU_SMOOTH)
-        gluCylinder(quadric, radius, radius, length, 16, 1)
-        
-        glPushMatrix()
-        glTranslatef(0, 0, length)
-        gluDisk(quadric, 0, radius, 16, 1)
-        glPopMatrix()
-        
-        gluDisk(quadric, 0, radius, 16, 1)
-
-        gluDeleteQuadric(quadric)
-        
-        # [FIX] Restore attributes (including Depth Mask = True)
-        glPopAttrib() 
-        glPopMatrix()
     def _draw_beam(self):
         length = self.actual_beam_length
         radius = config.ATTACK_WIDTH / 2.0
@@ -303,6 +242,5 @@ class Pokemon:
         glPopMatrix()
         
         gluDisk(quadric, 0, radius, 16, 1)
-
         gluDeleteQuadric(quadric)
         glPopAttrib()

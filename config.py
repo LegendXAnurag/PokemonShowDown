@@ -1,7 +1,7 @@
 # config.py
 # Window Settings
-SCREEN_WIDTH = 1200
-SCREEN_HEIGHT = 800
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 WINDOW_TITLE = "Pokemon 3D Team Battle Engine"
 
 # Simulation Settings
@@ -37,7 +37,9 @@ LIDAR_CHANNELS = 6
 # Attack Settings
 ATTACK_RANGE = 2.0     
 ATTACK_WIDTH = 1.0       
-ATTACK_DURATION = 1.0  
+ATTACK_DURATION = 1
+HUMAN_ATTACK_DURATION = 0.5
+
 
 # Gameplay
 MOVE_SPEED = 0.10
@@ -60,7 +62,9 @@ REWARD_FRIENDLY_FIRE_SCALE = 5000.0 # [NEW] Penalty multiplier for hitting teamm
 
 # --- SPAWN SETTINGS ---
 SPAWN_MARGIN = 1.0       
-MIN_SPAWN_DIST = 2.0     
+MIN_SPAWN_DIST = 4.0     # Minimum distance between ENEMIES
+TEAM_MEMBER_DIST = 1.5   # Maximum distance from team center
+MIN_TEAMMATE_DIST = 1.5  # Minimum distance between TEAMMATES     
 
 # --- TRAINING HYPERPARAMETERS ---
 LEARNING_RATE = 3e-4

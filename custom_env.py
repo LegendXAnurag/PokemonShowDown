@@ -63,23 +63,59 @@ class PokemonBattleEnv(ParallelEnv):
 
         limit = config.BOUNDARY - config.SPAWN_MARGIN
         positions = []
+        # agent_idx is synonymous with index in self.agents
         
-        for _ in range(len(self.agents)):
+        num_teams = len(config.TEAMS_SETUP)
+        
+        for i, agent_id in enumerate(self.agents):
+            team_idx = self.agent_team_map[agent_id]
+            
+            # Calculate Team Center
+            # Place teams in a circle
+            radius = (config.BOUNDARY - config.SPAWN_MARGIN) * 0.75 # Use 75% of available space
+            angle = (2 * math.pi / num_teams) * team_idx
+            cx = radius * math.cos(angle)
+            cz = radius * math.sin(angle)
+            
             attempts = 0
+            placed = False
             while attempts < 100:
-                x = random.uniform(-limit, limit)
-                z = random.uniform(-limit, limit)
+                # Spawn around team center
+                r = random.uniform(0, config.TEAM_MEMBER_DIST)
+                theta = random.uniform(0, 2*math.pi)
+                x = cx + r * math.cos(theta)
+                z = cz + r * math.sin(theta)
+                
+                # Check bounds
+                if not (-limit <= x <= limit and -limit <= z <= limit):
+                    attempts += 1
+                    continue
+                    
                 valid = True
-                for (ex, ez) in positions:
+                for j, (ex, ez) in enumerate(positions):
+                    existing_agent = self.agents[j]
+                    existing_team = self.agent_team_map[existing_agent]
                     dist = math.sqrt((x - ex)**2 + (z - ez)**2)
-                    if dist < config.MIN_SPAWN_DIST:
-                        valid = False
-                        break
+                    
+                    if existing_team == team_idx:
+                        # Ensure no overlap with teammate
+                        if dist < config.MIN_TEAMMATE_DIST: 
+                            valid = False
+                            break
+                    else:
+                        # Ensure distance from enemy
+                        if dist < config.MIN_SPAWN_DIST:
+                            valid = False
+                            break
+                
                 if valid:
                     positions.append((x, z))
+                    placed = True
                     break
                 attempts += 1
-            if len(positions) < (_ + 1):
+                
+            if not placed:
+                # Fallback: Random position
                 positions.append((random.uniform(-limit, limit), random.uniform(-limit, limit)))
 
         species_list = list(pokemon_data.POKEMON_DB.keys())

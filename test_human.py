@@ -380,11 +380,11 @@ def main():
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
         
-        cam_x, cam_y, cam_z = 0, 25, 20
+        cam_x, cam_y, cam_z = 0, 15, 15
         if player_p:
             target_x = player_p.x
             target_z = player_p.z + 10
-            cam_x, cam_y, cam_z = target_x, 15, target_z + 8
+            cam_x, cam_y, cam_z = target_x, 10, target_z + 8
             gluLookAt(cam_x, cam_y, cam_z, player_p.x, 0, player_p.z, 0, 1, 0)
         else:
             gluLookAt(0, 25, 20, 0, 0, 0, 0, 1, 0)
