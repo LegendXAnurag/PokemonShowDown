@@ -379,18 +379,11 @@ class PokemonBattleEnv(ParallelEnv):
         draw_ground()
         draw_walls()
         
-        # 2. Draw Pokemon Bodies (Opaque)
-        # We draw these first so the Z-buffer is filled with their depth
-        for p in self.pokemon_instances.values():
-            if p.hp > 0: 
-                p.draw_model() # Changed from p.draw()
-
-        # 3. Draw Attack Beams (Transparent)
-        # We draw these last. Because we disabled DepthMask in draw_beam,
-        # they will visually blend on top of pokemon, but won't delete them.
+        # 2. Draw all Pokemon (model + beam handled inside p.draw())
+        # [FIX BUG-01] draw_model() and draw_beam() don't exist; p.draw() is correct
         for p in self.pokemon_instances.values():
             if p.hp > 0:
-                p.draw_beam()
+                p.draw()
 
         pygame.display.flip()
         if self.clock: self.clock.tick(config.FPS)

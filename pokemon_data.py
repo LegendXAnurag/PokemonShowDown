@@ -26,6 +26,14 @@ POKEMON_DB = {
         "rotation_correction": 0
     },
 
+    "bulbasaur": {
+        "name": "Bulbasaur",
+        "hp": 100,
+        "attack_power": 7,
+        "model_path": "assets/bulbasaur.glb",
+        "color_fallback": (0.2, 0.8, 0.2),  # Green
+        "rotation_correction": 0
+    },
     "rhyhorn": {
         "name": "Rhyhorn",
         "hp": 100,

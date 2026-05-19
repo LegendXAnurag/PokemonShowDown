@@ -162,9 +162,9 @@ class Pokemon:
         
         if target:
             if target.team_id == self.team_id:
-                target.take_damage(self.attack_power)
+                # [FIX BUG-03/08] FF: track penalty but deal NO HP damage; return False
                 self.friendly_fire_damage += self.attack_power
-                return True 
+                return False 
 
             hp_ratio = target.hp / target.max_hp
             target.take_damage(self.attack_power)
