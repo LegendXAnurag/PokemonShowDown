@@ -1,7 +1,7 @@
 # config.py
 # Window Settings
-SCREEN_WIDTH = 1920
-SCREEN_HEIGHT = 1080
+SCREEN_WIDTH = 1280
+SCREEN_HEIGHT = 640
 WINDOW_TITLE = "Pokemon 3D Team Battle Engine"
 
 # Simulation Settings

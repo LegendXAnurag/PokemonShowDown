@@ -1,0 +1,52 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Pokemon 3D Team Battle Engine — Python Dependencies
+# Tested with Python 3.12 on Windows (CPU + CUDA 11.8/12.1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Deep Learning ─────────────────────────────────────────────────────────────
+# PyTorch (CPU-only). For CUDA, replace this line with the appropriate wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0
+
+# ── Reinforcement Learning ────────────────────────────────────────────────────
+# PettingZoo  — multi-agent environment API (ParallelEnv)
+pettingzoo>=1.24.0
+
+# Gymnasium   — base environment interface (required by PettingZoo)
+gymnasium>=0.29.0
+
+# SuperSuit   — environment wrappers: pettingzoo_env_to_vec_env + concat_vec_envs
+supersuit>=3.9.1
+
+# ── 3D Rendering & Window ─────────────────────────────────────────────────────
+# Pygame      — window creation, event loop, font rendering, clock
+pygame>=2.6.0
+
+# PyOpenGL    — OpenGL bindings (GL, GLU, matrix ops, buffer draws)
+PyOpenGL>=3.1.7
+
+# PyOpenGL-accelerate — optional C extension for faster array calls
+#   (comment out if it fails to build on your system)
+PyOpenGL-accelerate>=3.1.7
+
+# ── 3D Model Loading ──────────────────────────────────────────────────────────
+# trimesh     — loads .glb/.obj files, concatenates scenes, computes normals
+trimesh>=4.3.0
+
+# ── Numerics ──────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+
+# ── Training Utilities ────────────────────────────────────────────────────────
+# tqdm        — progress bar + ETA display during training loop
+tqdm>=4.66.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Optional / transitive dependencies that may need manual installation
+# on some systems (trimesh extras for .glb support):
+#
+#   pip install trimesh[easy]
+#   - This installs: pyglet, pyassimp, lxml, pillow, scipy, etc.
+#
+# If trimesh cannot load .glb files, install the full extras:
+#   pip install "trimesh[all]"
+# ──────────────────────────────────────────────────────────────────────────────

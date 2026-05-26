@@ -56,7 +56,7 @@ def init_gl():
     glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glMatrixMode(GL_PROJECTION)
-    gluPerspective(45, config.SCREEN_WIDTH / config.SCREEN_HEIGHT, 0.1, 50.0)
+    gluPerspective(60, config.SCREEN_WIDTH / config.SCREEN_HEIGHT, 0.1, 60.0)
     glMatrixMode(GL_MODELVIEW)
 
 
@@ -231,14 +231,21 @@ def get_action_mask(pokemon, all_pokemons):
     return mask
 
 
-# ── Camera ────────────────────────────────────────────────────────────────────
-def compute_camera(orbit_angle, use_orbit):
-    if use_orbit:
-        r = 18
+# ── Camera modes (mirrors test_human.py) ────────────────────────────────────
+CAMERA_OVERHEAD = "overhead"
+CAMERA_ORBIT    = "orbit"
+
+# Battlefield is BOUNDARY=5 (10x10 world units).
+# Overhead: height=12, pull-back=8 gives a tight, filled view at 60° FOV.
+# Orbit: radius=12, height=10 keeps the whole arena in frame while rotating.
+def compute_camera(camera_mode, orbit_angle):
+    if camera_mode == CAMERA_ORBIT:
+        r = 12
         cam_x = r * math.cos(math.radians(orbit_angle))
         cam_z = r * math.sin(math.radians(orbit_angle))
-        return (cam_x, 14, cam_z), (0, 0, 0)
-    return (0, 25, 20), (0, 0, 0)
+        return (cam_x, 10, cam_z), (0, 0, 0)
+    # CAMERA_OVERHEAD (default) — positioned to fill the 10x10 arena
+    return (0, 12, 8), (0, 0, 0)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -252,7 +259,7 @@ def main():
     pygame.display.set_mode(
         (config.SCREEN_WIDTH, config.SCREEN_HEIGHT), DOUBLEBUF | OPENGL)
     pygame.display.set_caption(
-        f"AI vs AI ({config.NUM_AGENTS} agents) | SPACE: Reset | O: Orbit Camera")
+        f"AI vs AI ({config.NUM_AGENTS} agents) | SPACE / R: Reset | C: Camera | O: Orbit")
     init_gl()
 
     # Fix BUG-07: restore correct CUDA detection
@@ -283,8 +290,8 @@ def main():
     particles  = ParticleSystem()
 
     # Camera state
+    camera_mode = CAMERA_OVERHEAD
     orbit_angle = 0.0
-    use_orbit   = False
 
     clock   = pygame.time.Clock()
     running = True
@@ -297,22 +304,31 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
+                if event.key in (pygame.K_SPACE, pygame.K_r):
                     pokemons  = reset_battle()
                     particles = ParticleSystem()
+                    win_counts = {i: 0 for i in range(len(config.TEAMS_SETUP))}
+                    score_hud.update(win_counts)
+                    pygame.display.set_caption(
+                        f"AI vs AI ({config.NUM_AGENTS} agents) | SPACE / R: Reset | C: Camera | O: Orbit")
+                # Cycle camera: Overhead → Orbit (AI viewer has no Follow mode)
+                if event.key == pygame.K_c:
+                    modes = [CAMERA_OVERHEAD, CAMERA_ORBIT]
+                    camera_mode = modes[(modes.index(camera_mode) + 1) % len(modes)]
+                # Quick orbit toggle (mirrors test_human.py K_o behaviour)
                 if event.key == pygame.K_o:
-                    use_orbit = not use_orbit
+                    camera_mode = CAMERA_ORBIT if camera_mode != CAMERA_ORBIT else CAMERA_OVERHEAD
 
         # ── Timers ────────────────────────────────────────────────────────────
         for p in pokemons:
             p.update_timers(config.DT)
 
         # ── Orbit angle ───────────────────────────────────────────────────────
-        if use_orbit:
+        if camera_mode == CAMERA_ORBIT:
             orbit_angle = (orbit_angle + 18 * dt) % 360
 
         # ── Camera ────────────────────────────────────────────────────────────
-        cam_pos, look_at = compute_camera(orbit_angle, use_orbit)
+        cam_pos, look_at = compute_camera(camera_mode, orbit_angle)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
         gluLookAt(*cam_pos, *look_at, 0, 1, 0)
@@ -356,7 +372,7 @@ def main():
             else:
                 label = "DRAW!"
             score_str = "  |  ".join(f"T{t}: {win_counts[t]}W" for t in win_counts)
-            pygame.display.set_caption(f"{label}  [{score_str}]  | O: Orbit | SPACE: Reset")
+            pygame.display.set_caption(f"{label}  [{score_str}]  | C: Camera | O: Orbit | SPACE/R: Reset")
             score_hud.update(win_counts)
             print(f"[Result] {label}  |  {score_str}")
 
