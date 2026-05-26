@@ -1,10 +1,10 @@
-# 🎮 Pokémon 3D Team Battle Engine
+# Pokemon 3D Team Battle Engine
 
 A **3D multi-agent reinforcement learning** battle engine built with Python, PyTorch, and OpenGL. Pokémon agents are trained using **MAPPO (Multi-Agent Proximal Policy Optimization)** to fight in a top-down 3D arena. A pre-trained AI can then be watched battling itself or challenged directly by a human player.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -40,20 +40,20 @@ The system has three main modes:
 
 ## Features
 
-- 🤖 **MAPPO Training** — Parameter-sharing PPO across all agents in both teams, with GAE advantage estimation
-- 🧠 **Action Masking** — Invalid actions (e.g., moving into a wall or attacking when no target is in range) are masked before sampling, ensuring the agent never wastes actions
-- 📡 **LIDAR Observation** — Each agent perceives its surroundings via 16 rays cast in 360°, each returning 6 channels of information (distance, is-wall, is-enemy, is-teammate, target HP, target facing)
-- ⚔️ **Backstab Mechanic** — Attacking a target from behind or the side awards a bonus reward multiplier, incentivizing tactical flanking behaviour
-- 🚫 **Friendly Fire Penalty** — Hitting a teammate does zero HP damage but incurs a massive reward penalty, preventing agents from harming their own team
-- 🎨 **3D OpenGL Rendering** — Real `.glb` 3D models rendered via `trimesh` + OpenGL with auto-scaling, rotation correction, and lighting
-- 💥 **Particle Effects** — Per-species colored particle bursts on attack (beam trail + hit explosion), rendered with additive blending for a glow effect
-- 📊 **On-Screen HUD** — Team win-counter overlay rendered as a 2D OpenGL pixel draw, visible at all times during the battle
-- 🎥 **Multiple Camera Modes** — Overhead, Follow (human mode only), and auto-rotating Orbit cameras
-- 🏥 **HP Bars** — Billboarded health bars floating above every Pokémon, always facing the camera
-- 🕹️ **Human Player Mode** — Mouse-aimed rotation, WASD movement, Space/click attack, with a species-selection screen before the battle
-- 🔄 **Configurable Teams** — Override team composition at runtime via `--teams 2v2` / `--teams 1v3` etc.
-- 📈 **CSV Training Logs** — Every training update is logged (reward, value loss, total loss, entropy, FPS) to a `.csv` file in `logs/`
-- 💾 **Checkpointing** — Model + optimizer state saved periodically; training can be resumed from any checkpoint
+- **MAPPO Training** — Parameter-sharing PPO across all agents in both teams, with GAE advantage estimation
+- **Action Masking** — Invalid actions (e.g., moving into a wall or attacking when no target is in range) are masked before sampling, ensuring the agent never wastes actions
+- **LIDAR Observation** — Each agent perceives its surroundings via 16 rays cast in 360°, each returning 6 channels of information (distance, is-wall, is-enemy, is-teammate, target HP, target facing)
+- **Backstab Mechanic** — Attacking a target from behind or the side awards a bonus reward multiplier, incentivizing tactical flanking behaviour
+- **Friendly Fire Penalty** — Hitting a teammate does zero HP damage but incurs a massive reward penalty, preventing agents from harming their own team
+- **3D OpenGL Rendering** — Real `.glb` 3D models rendered via `trimesh` + OpenGL with auto-scaling, rotation correction, and lighting
+- **Particle Effects** — Per-species colored particle bursts on attack (beam trail + hit explosion), rendered with additive blending for a glow effect
+- **On-Screen HUD** — Team win-counter overlay rendered as a 2D OpenGL pixel draw, visible at all times during the battle
+- **Multiple Camera Modes** — Overhead, Follow (human mode only), and auto-rotating Orbit cameras
+- **HP Bars** — Billboarded health bars floating above every Pokémon, always facing the camera
+- **Human Player Mode** — Mouse-aimed rotation, WASD movement, Space/click attack, with a species-selection screen before the battle
+- **Configurable Teams** — Override team composition at runtime via `--teams 2v2` / `--teams 1v3` etc.
+- **CSV Training Logs** — Every training update is logged (reward, value loss, total loss, entropy, FPS) to a `.csv` file in `logs/`
+- **Checkpointing** — Model + optimizer state saved periodically; training can be resumed from any checkpoint
 
 ---
 
